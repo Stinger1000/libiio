@@ -156,6 +156,8 @@ ssize_t iio_buffer_refill(struct iio_buffer *buffer)
 
 ssize_t iio_buffer_push(struct iio_buffer *buffer)
 {
+	return 0;
+	
 	const struct iio_device *dev = buffer->dev;
 	ssize_t ret;
 
