@@ -4,18 +4,11 @@ if [ "$TRIGGER_NEXT_BUILD" = "true" ] && [ "$TRIGGERING_NEXT_BUILD" != "true" ] 
 	exit 0
 fi
 
-export TRAVIS_API_URL="https://api.travis-ci.com"
+export TRAVIS_API_URL="https://api.travis-ci.org"
 LOCAL_BUILD_DIR=${LOCAL_BUILD_DIR:-build}
 
 HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_INSTALL_CLEANUP
-
-PYTHON=python3
-export PYTHON
-
-# This needs to be duplicated inside 'inside_docker.sh'
-# It's the common convention between host & container
-INSIDE_DOCKER_BUILD_DIR=/docker_build_dir
 
 # Add here all the common env-vars that should be propagated
 # to the docker image, simply by referencing the env-var name.
@@ -26,7 +19,7 @@ INSIDE_DOCKER_BUILD_DIR=/docker_build_dir
 #
 # If these nothing should be passed, then clear or
 #'unset INSIDE_DOCKER_TRAVIS_CI_ENV' after this script is included
-INSIDE_DOCKER_TRAVIS_CI_ENV="TRAVIS TRAVIS_COMMIT TRAVIS_PULL_REQUEST OS_TYPE OS_VERSION ARTIFACTNAME"
+INSIDE_DOCKER_TRAVIS_CI_ENV="TRAVIS TRAVIS_COMMIT TRAVIS_PULL_REQUEST OS_VERSION"
 
 COMMON_SCRIPTS="inside_docker.sh"
 
@@ -46,6 +39,33 @@ backtrace() {
 			echo "${BASH_SOURCE[$i]}:${BASH_LINENO[$i]}.${FUNCNAME[$i]}()"
 			i=$((i - 1))
 		done
+	fi
+}
+
+add_python_path() {
+	echo "adding Python to the path"
+	if [ -d "$HOME/.pyenv/bin" -a "$(echo "$PATH" | grep .pyenv/bin | wc -c)" -eq "0" ] ; then
+		echo "adding $HOME/.pyenv/bin to path"
+		export PATH="$HOME/.pyenv/bin:$PATH"
+	fi
+	if [ -z "${PYENV_SHELL}" ] ; then
+		echo init pyenv
+		eval "$(pyenv init -)"
+	fi
+	if [ -d /opt/pyenv/versions/3.6.3/bin -a "$(echo "$PATH" | grep opt/pyenv/versions | wc -c)" -eq "0" ] ; then
+		echo adding python on opt to PATH
+		export PATH="/opt/pyenv/versions/3.6.3/bin:$PATH"
+	fi
+	if [ -d /root/.pyenv/versions/3.6.3/bin -a "$(echo "$PATH" | grep root/.pyenv/versions | wc -c)" -eq "0" ] ; then
+		echo adding python on root/.pyenv to PATH
+		export PATH="/root/.pyenv/versions/3.6.3/bin:$PATH"
+	fi
+	if ! command_exists python ; then
+		echo No python on path
+		echo "$PATH"
+	else
+		python --version
+		command -v python
 	fi
 }
 
@@ -125,7 +145,7 @@ trigger_build() {
 		-H "Travis-API-Version: 3" \
 		-H "Authorization: token $TRAVIS_API_TOKEN" \
 		-d "$body" \
-		"${TRAVIS_API_URL}/repo/$repo_slug/requests"
+		"https://api.travis-ci.org/repo/$repo_slug/requests"
 }
 
 trigger_adi_build() {
@@ -237,8 +257,10 @@ sftp_upload() {
 	if [ -n "${LATE}" ] ; then
 		sftp_cmd_pipe <<-EOF
 			cd ${DEPLOY_TO}
+
 			put ${FROM} ${TO}
 			ls -l ${TO}
+
 			symlink ${TO} ${LATE}
 			ls -l ${LATE}
 			bye
@@ -246,6 +268,7 @@ sftp_upload() {
 	else
 		sftp_cmd_pipe <<-EOF
 			cd ${DEPLOY_TO}
+
 			put ${FROM} ${TO}
 			ls -l ${TO}
 			bye
@@ -395,15 +418,8 @@ remove_old_pkgs() {
 }
 
 prepare_docker_image() {
-	local DOCKER_IMAGE="${OS_TYPE}:${OS_VERSION}"
-	# If arch is specified, setup multiarch support
-	if [ -n "$OS_ARCH" ] ; then
-		sudo apt-get -qq update
-		sudo DEBIAN_FRONTEND=noninteractive apt-get install -y qemu \
-			qemu binfmt-support qemu-user-static
-		sudo docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-		DOCKER_IMAGE="${OS_ARCH}/${DOCKER_IMAGE}"
-	fi
+	local DOCKER_IMAGE="$1"
+	sudo apt-get -qq update
 	echo 'DOCKER_OPTS="-H tcp://127.0.0.1:2375 -H unix:///var/run/docker.sock -s devicemapper"' | sudo tee /etc/default/docker > /dev/null
 	sudo service docker restart
 	sudo docker pull "$DOCKER_IMAGE"
@@ -414,21 +430,18 @@ __save_env_for_docker() {
 	for env in $INSIDE_DOCKER_TRAVIS_CI_ENV ; do
 		val="$(eval echo "\$${env}")"
 		if [ -n "$val" ] ; then
-			echo "export ${env}=\"${val}\"" >> "${env_file}"
+			echo "export ${env}=${val}" >> "${env_file}"
 		fi
 	done
 }
 
 run_docker_script() {
-	local DOCKER_SCRIPT="$(get_script_path "$1")"
-	local MOUNTPOINT="${INSIDE_DOCKER_BUILD_DIR}"
-	local DOCKER_IMAGE="${OS_TYPE}:${OS_VERSION}"
+	local DOCKER_SCRIPT="$(get_script_path $1)"
+	local DOCKER_IMAGE="$2"
+	local OS_TYPE="$3"
+	local MOUNTPOINT="${4:-docker_build_dir}"
 
-	if [ -n "$OS_ARCH" ] ; then
-		DOCKER_IMAGE="${OS_ARCH}/${DOCKER_IMAGE}"
-	fi
-
-	__save_env_for_docker "$(pwd)"
+	__save_env_for_docker "${TRAVIS_BUILD_DIR}"
 
 	sudo docker run --rm=true \
 		-v "$(pwd):/${MOUNTPOINT}:rw" \
@@ -439,22 +452,16 @@ run_docker_script() {
 ensure_command_exists() {
 	local cmd="$1"
 	local package="$2"
-	local yes_confirm
 	[ -n "$cmd" ] || return 1
 	[ -n "$package" ] || package="$cmd"
 	! command_exists "$cmd" || return 0
 	# go through known package managers
 	for pacman in apt-get brew yum ; do
 		command_exists $pacman || continue
-		if [ "$pacman" = "brew" ] ; then
-			yes_confirm=
-		else
-			yes_confirm="-y"
-		fi
-		"$pacman" install $yes_confirm "$package" || {
+		"$pacman" install -y "$package" || {
 			# Try an update if install doesn't work the first time
-			"$pacman" $yes_confirm update && \
-				"$pacman" install $yes_confirm "$package"
+			"$pacman" -y update && \
+				"$pacman" install -y "$package"
 		}
 		return $?
 	done
@@ -467,48 +474,30 @@ version_lt() { test "$(echo "$@" | tr " " "\n" | sort -rV | head -n 1)" != "$1";
 version_ge() { test "$(echo "$@" | tr " " "\n" | sort -rV | head -n 1)" = "$1"; }
 
 get_codename() {
-	local VERSION_CODENAME
-	eval $(grep -w VERSION_CODENAME /etc/os-release)
-	echo "$VERSION_CODENAME"
+	lsb_release -c -s
 }
 
 get_dist_id() {
-	local ID
-	eval $(grep -w ID /etc/os-release)
-	echo "$ID"
+	lsb_release -i -s
 }
 
 get_version() {
-	local VERSION_ID
-	eval $(grep -w VERSION_ID /etc/os-release)
-	echo "$VERSION_ID"
+	lsb_release -r -s
 }
 
 is_ubuntu_at_least_ver() {
-	[ "$(get_dist_id)" = "ubuntu" ] || return 1
+	[ "$(get_dist_id)" = "Ubuntu" ] || return 1
 	version_ge "$(get_version)" "$1"
 }
 
 is_centos_at_least_ver() {
-	[ "$(get_dist_id)" = "centos" ] || return 1
+	[ "$(get_dist_id)" = "CentOS" ] || return 1
 	version_ge "$(get_version)" "$1"
-}
-
-is_python_at_least_ver() {
-	local out python_exec
-
-	python_exec="$1"
-	command_exists "$python_exec" || return 1
-	out=$($python_exec --version)
-	version_ge "${out#* }" "$2"
 }
 
 is_arm() {
 	[ "$(dpkg --print-architecture)" = "armhf" ] || return 1
-}
-
-is_arm64() {
-	[ "$(dpkg --print-architecture)" = "arm64" ] || return 1
+	test "$(dpkg --print-architecture)" = "armhf"
 }
 
 print_github_api_rate_limits() {
@@ -519,29 +508,6 @@ print_github_api_rate_limits() {
 	echo_green '-----------------------------------------'
 	wget -q -O- https://api.github.com/rate_limit
 	echo_green '-----------------------------------------'
-}
-
-setup_build_type_env_vars() {
-	OS_TYPE=${OS_TYPE:-default}
-
-	# For a 'arm32_v7/debian_docker' string, OS TYPE becomes 'debian'
-	# This also works for just 'debian_docker'
-	# And we're extracting OS_ARCH if present
-	if [ "${OS_TYPE#*_}" = "docker" ] ; then
-		BUILD_TYPE=generic_docker
-		OS_TYPE=${OS_TYPE%_*}
-		OS_ARCH=${OS_TYPE%/*}
-		OS_TYPE=${OS_TYPE#*/}
-		if [ "$OS_ARCH" = "$OS_TYPE" ] ; then
-			OS_ARCH=
-		fi
-	else
-		BUILD_TYPE="$OS_TYPE"
-	fi
-
-	export OS_TYPE
-	export OS_ARCH
-	export BUILD_TYPE
 }
 
 ensure_command_exists sudo

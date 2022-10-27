@@ -1,9 +1,18 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2016 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  */
 
 #include "thread-pool.h"
@@ -31,7 +40,6 @@ struct thread_pool {
 	pthread_cond_t thread_count_cond;
 	unsigned int thread_count;
 	int stop_fd;
-	bool stop;
 };
 
 struct thread_body_data {
@@ -131,8 +139,6 @@ struct thread_pool * thread_pool_new(void)
 		return NULL;
 	}
 
-	pool->stop = false;
-
 	pthread_mutex_init(&pool->thread_count_lock, NULL);
 	pthread_cond_init(&pool->thread_count_cond, NULL);
 	pool->thread_count = 0;
@@ -149,8 +155,6 @@ void thread_pool_stop(struct thread_pool *pool)
 {
 	uint64_t e = 1;
 	int ret;
-
-	pool->stop = true;
 
 	do {
 		ret = write(pool->stop_fd, &e, sizeof(e));
@@ -173,11 +177,6 @@ void thread_pool_stop_and_wait(struct thread_pool *pool)
 	do {
 		ret = read(pool->stop_fd, &e, sizeof(e));
 	} while (ret != -1 || errno == EINTR);
-}
-
-bool thread_pool_is_stopped(const struct thread_pool *pool)
-{
-	return pool->stop;
 }
 
 void thread_pool_destroy(struct thread_pool *pool)

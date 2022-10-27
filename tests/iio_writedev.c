@@ -1,16 +1,28 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * iio_writedev - Part of the Industrial I/O (IIO) utilities
  *
  * Copyright (C) 2014-2018 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
  *         that Michael Hennerich <michael.hennerich@analog.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  * */
 
 #include <errno.h>
 #include <getopt.h>
 #include <iio.h>
-#include <inttypes.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,29 +42,27 @@
 
 #define SAMPLES_PER_READ 256
 #define DEFAULT_FREQ_HZ  100
-#define REFILL_PER_BENCHMARK 10
 
 static const struct option options[] = {
 	  {"trigger", required_argument, 0, 't'},
 	  {"buffer-size", required_argument, 0, 'b'},
 	  {"samples", required_argument, 0, 's' },
+	  {"timeout", required_argument, 0, 'T'},
 	  {"auto", no_argument, 0, 'a'},
 	  {"cyclic", no_argument, 0, 'c'},
-	  {"benchmark", no_argument, 0, 'B'},
 	  {0, 0, 0, 0},
 };
 
 static const char *options_descriptions[] = {
-	("[-t <trigger>] "
-		"[-b <buffer-size>] [-s <samples>] "
-		"<iio_device> [<channel> ...]"),
+	"[-t <trigger>] "
+		"[-T <timeout-ms>] [-b <buffer-size>] [-s <samples>] "
+		"<iio_device> [<channel> ...]",
 	"Use the specified trigger.",
 	"Size of the transmit buffer. Default is 256.",
 	"Number of samples to write, 0 = infinite. Default is 0.",
+	"Buffer timeout in milliseconds. 0 = no timeout",
 	"Scan for available contexts and if only one is available use it.",
 	"Use cyclic buffer mode.",
-	("Benchmark throughput."
-		"\n\t\t\tStatistics will be printed on the standard input."),
 };
 
 static struct iio_context *ctx;
@@ -188,26 +198,23 @@ static ssize_t read_sample(const struct iio_channel *chn,
 	return (ssize_t) nb;
 }
 
-#define MY_OPTS "t:b:s:T:acB"
+#define MY_OPTS "t:b:s:T:ac"
 
 int main(int argc, char **argv)
 {
 	char **argw;
-	unsigned int i, j, nb_channels;
+	unsigned int i, nb_channels;
 	unsigned int nb_active_channels = 0;
 	unsigned int buffer_size = SAMPLES_PER_READ;
-	uint64_t refill_per_benchmark = REFILL_PER_BENCHMARK;
 	int c;
 	struct iio_device *dev;
 	ssize_t sample_size;
-	bool mib, cyclic_buffer = false, benchmark = false;
+	int timeout = -1;
+	bool cyclic_buffer = false;
 	ssize_t ret;
 	struct option *opts;
-	uint64_t before = 0, after, rate, total;
 
 	argw = dup_argv(MY_NAME, argc, argv);
-
-	setup_sig_handler();
 
 	ctx = handle_common_opts(MY_NAME, argc, argw, MY_OPTS, options, options_descriptions);
 	opts = add_common_options(options);
@@ -223,7 +230,6 @@ int main(int argc, char **argv)
 		case 'n':
 		case 'x':
 		case 'u':
-		case 'T':
 			break;
 		case 'S':
 		case 'a':
@@ -243,10 +249,7 @@ int main(int argc, char **argv)
 				fprintf(stderr, "Buffer Size requires argument\n");
 				return EXIT_FAILURE;
 			}
-			buffer_size = sanitize_clamp("buffer size", optarg, 1, SIZE_MAX);
-			break;
-		case 'B':
-			benchmark = true;
+			buffer_size = sanitize_clamp("buffer size", optarg, 64, 4 * 1024 * 1024);
 			break;
 		case 's':
 			if (!optarg) {
@@ -254,6 +257,13 @@ int main(int argc, char **argv)
 				return EXIT_FAILURE;
 			}
 			num_samples = sanitize_clamp("number of samples", optarg, 0, SIZE_MAX);
+			break;
+		case 'T':
+			if (!optarg) {
+				fprintf(stderr, "Timeout requires argument\n");
+				return EXIT_FAILURE;
+			}
+			timeout = sanitize_clamp("timeout", optarg, 0, INT_MAX);
 			break;
 		case 'c':
 			cyclic_buffer = true;
@@ -265,8 +275,8 @@ int main(int argc, char **argv)
 	}
 	free(opts);
 
-	if (argc < optind) {
-		fprintf(stderr, "Too few arguments.\n\n");
+	if (argc == optind) {
+		fprintf(stderr, "Incorrect number of arguments.\n\n");
 		usage(MY_NAME, options, options_descriptions);
 		return EXIT_FAILURE;
 	}
@@ -274,52 +284,16 @@ int main(int argc, char **argv)
 	if (!ctx)
 		return EXIT_FAILURE;
 
-	if (!argw[optind]) {
-		unsigned int nb_devices = iio_context_get_devices_count(ctx);
+	setup_sig_handler();
 
-		for (i = 0; i < nb_devices; i++) {
-			const char *dev_id = NULL, *label = NULL, *name = NULL;
-			bool hit;
-
-			dev = iio_context_get_device(ctx, i);
-			nb_channels = iio_device_get_channels_count(dev);
-
-			if (!nb_channels)
-				continue;
-
-			hit = false;
-			for (j = 0; j < nb_channels; j++) {
-				struct iio_channel *ch = iio_device_get_channel(dev, j);
-
-				if (!iio_channel_is_scan_element(ch) ||
-						!iio_channel_is_output(ch))
-					continue;
-
-				hit = true;
-
-				dev_id = iio_device_get_id(dev);
-				label = iio_device_get_label(dev);
-				name = iio_device_get_name(dev);
-
-				printf("Example : " MY_NAME " -u %s -b 256 -s 1024 %s %s\n",
-						iio_context_get_attr_value(ctx, "uri"),
-						label ? label : name ? name : dev_id,
-						iio_channel_get_id(ch));
-			}
-			if (hit)
-				printf("Example : " MY_NAME " -u %s -b 256 -s 1024 %s\n",
-						iio_context_get_attr_value(ctx, "uri"),
-						label ? label : name ? name : dev_id);
+	if (timeout >= 0) {
+		ret = iio_context_set_timeout(ctx, timeout);
+		if (ret < 0) {
+			 char err_str[1024];
+			 iio_strerror(-(int)ret, err_str, sizeof(err_str));
+			 fprintf(stderr, "IIO contexts set timeout failed : %s (%zd)\n",
+					 err_str, ret);
 		}
-		iio_context_destroy(ctx);
-		usage(MY_NAME, options, options_descriptions);
-		return EXIT_FAILURE;
-	}
-
-	if (benchmark && cyclic_buffer) {
-		fprintf(stderr, "Cannot benchmark in cyclic mode.\n");
-		iio_context_destroy(ctx);
-		return EXIT_FAILURE;
 	}
 
 	dev = iio_context_find_device(ctx, argw[optind]);
@@ -355,7 +329,8 @@ int main(int argc, char **argv)
 			if (ret < 0) {
 				char buf[256];
 				iio_strerror(-(int)ret, buf, sizeof(buf));
-				fprintf(stderr, "sample rate not set : %s\n", buf);
+				fprintf(stderr, "sample rate not set : %s (%zd)\n",
+						buf, ret);
 			}
 		}
 
@@ -363,7 +338,8 @@ int main(int argc, char **argv)
 		if (ret < 0) {
 			char buf[256];
 			iio_strerror(-(int)ret, buf, sizeof(buf));
-			fprintf(stderr, "set trigger failed : %s\n", buf);
+			fprintf(stderr, "set triffer failed : %s (%zd)\n",
+					buf, ret);
 		}
 	}
 
@@ -379,16 +355,18 @@ int main(int argc, char **argv)
 			}
 		}
 	} else {
-		for (j = optind + 1; j < (unsigned int) argc; j++) {
-			ret = iio_device_enable_channel(dev, argw[j], true);
-			if (ret < 0) {
-				char buf[256];
-				iio_strerror(-(int) ret, buf, sizeof(buf));
-				fprintf(stderr, "Bad channel name \"%s\" : %s\n", argw[j], buf);
-				iio_context_destroy(ctx);
-				return EXIT_FAILURE;
+		for (i = 0; i < nb_channels; i++) {
+			unsigned int j;
+			struct iio_channel *ch = iio_device_get_channel(dev, i);
+			for (j = optind + 1; j < (unsigned int) argc; j++) {
+				const char *n = iio_channel_get_name(ch);
+				if ((!strcmp(argw[j], iio_channel_get_id(ch)) ||
+						(n && !strcmp(n, argw[j]))) &&
+						iio_channel_is_output(ch)) {
+					iio_channel_enable(ch);
+					nb_active_channels++;
+				}
 			}
-			nb_active_channels++;
 		}
 	}
 
@@ -424,12 +402,10 @@ int main(int argc, char **argv)
 	_setmode(_fileno( stdin ), _O_BINARY);
 #endif
 
-	for (i = 0, total = 0; app_running; ) {
-		if (benchmark) {
-			before = get_time_us();
-		} else if (iio_buffer_step(buffer) == sample_size) {
-			/* If there are only the samples we requested, we don't
-			 * need to demux */
+	while (app_running) {
+		/* If there are only the samples we requested, we don't need to
+		 * demux */
+		if (iio_buffer_step(buffer) == sample_size) {
 			void *start = iio_buffer_start(buffer);
 			size_t write_len, len = (intptr_t) iio_buffer_end(buffer)
 				- (intptr_t) start;
@@ -457,7 +433,8 @@ int main(int argc, char **argv)
 			if (ret < 0) {
 				char buf[256];
 				iio_strerror(-(int)ret, buf, sizeof(buf));
-				fprintf(stderr, "buffer processing failed : %s\n", buf);
+				fprintf(stderr, "buffer processing failed : %s (%zd)\n",
+						buf, ret);
 			}
 		}
 
@@ -468,30 +445,6 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Unable to push buffer: %s\n", buf);
 			break;
 		}
-
-		if (benchmark) {
-			after = get_time_us();
-			total += after - before;
-
-			if (++i == refill_per_benchmark) {
-				rate = buffer_size * sample_size *
-					refill_per_benchmark * 1000000ull / total;
-				mib = rate > 1048576;
-
-				fprintf(stderr, "\33[2K\rThroughput: %" PRIu64 " %ciB/s",
-					rate / (1024 * (mib ? 1024 : 1)),
-					mib ? 'M' : 'K');
-
-				/* Print every 100ms more or less */
-				refill_per_benchmark = refill_per_benchmark * 100000 / total;
-				if (refill_per_benchmark < REFILL_PER_BENCHMARK)
-					refill_per_benchmark = REFILL_PER_BENCHMARK;
-
-				i = 0;
-				total = 0;
-			}
-		}
-
 
 		while(cyclic_buffer && app_running) {
 #ifdef _WIN32

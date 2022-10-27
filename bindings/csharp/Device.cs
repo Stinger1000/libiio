@@ -1,10 +1,20 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2015 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 using System;
 using System.Collections.Generic;
@@ -136,9 +146,6 @@ namespace iio
         private static extern IntPtr iio_device_get_name(IntPtr dev);
 
         [DllImport("libiio.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr iio_device_get_label(IntPtr dev);
-
-        [DllImport("libiio.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern uint iio_device_get_channels_count(IntPtr dev);
 
         [DllImport("libiio.dll", CallingConvention = CallingConvention.Cdecl)]
@@ -207,12 +214,6 @@ namespace iio
         /// <summary>The name of this device.</summary>
         public readonly string name;
 
-        /// <summary>The label of this device.</summary>
-        public string label { get; private set; }
-
-        /// <summary>True if the device is a hardware monitoring device, False if it is a IIO device.</summary>
-        public bool hwmon { get; private set; }
-
         /// <summary>A <c>list</c> of all the attributes that this device has.</summary>
         public readonly List<Attr> attrs;
 
@@ -270,11 +271,6 @@ namespace iio
             {
                 name = Marshal.PtrToStringAnsi(name_ptr);
             }
-
-            IntPtr label_ptr = iio_device_get_label(dev);
-
-            label = label_ptr == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(label_ptr);
-            hwmon = id[0] == 'h';
         }
 
         /// <summary>Get the <see cref="iio.Channel"/> object of the specified name.</summary>

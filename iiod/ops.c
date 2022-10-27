@@ -1,15 +1,26 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #include "ops.h"
 #include "parser.h"
 #include "thread-pool.h"
 #include "../debug.h"
+#include "../iio-private.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -94,7 +105,6 @@ struct DevEntry {
 	struct iio_device *dev;
 	struct iio_buffer *buf;
 	unsigned int sample_size, nb_clients;
-	unsigned int samples_count;
 	bool update_mask;
 	bool cyclic;
 	bool closed;
@@ -120,36 +130,6 @@ struct sample_cb_info {
 /* Protects iio_device_{set,get}_data() from concurrent access from multiple
  * clients */
 static pthread_mutex_t devlist_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static unsigned int get_channel_number(const struct iio_channel *chn)
-{
-	const struct iio_device *dev = iio_channel_get_device(chn);
-	const struct iio_channel *other;
-	unsigned int i = 0;
-
-	for (i = 0; i < iio_device_get_channels_count(dev); i++) {
-		other = iio_device_get_channel(dev, i);
-		if (other == chn)
-			break;
-	}
-
-	return i;
-}
-
-static inline const char *dev_label_or_name_or_id(const struct iio_device *dev)
-{
-	const char *name;
-
-	name = iio_device_get_label(dev);
-	if (name)
-		return name;
-
-	name = iio_device_get_name(dev);
-	if (name)
-		return name;
-
-	return iio_device_get_id(dev);
-}
 
 #if WITH_AIO
 static ssize_t async_io(struct parser_pdata *pdata, void *buf, size_t len,
@@ -373,7 +353,7 @@ static void print_value(struct parser_pdata *pdata, long value)
 		output(pdata, "\n");
 	} else {
 		char buf[128];
-		snprintf(buf, sizeof(buf), "%li\n", value);
+		iio_snprintf(buf, sizeof(buf), "%li\n", value);
 		output(pdata, buf);
 	}
 }
@@ -381,10 +361,8 @@ static void print_value(struct parser_pdata *pdata, long value)
 static ssize_t send_sample(const struct iio_channel *chn,
 		void *src, size_t length, void *d)
 {
-	unsigned int number = get_channel_number(chn);
 	struct sample_cb_info *info = d;
-
-	if (iio_channel_get_index(chn) < 0 || !TEST_BIT(info->mask, number))
+	if (chn->index < 0 || !TEST_BIT(info->mask, chn->number))
 		return 0;
 	if (info->nb_bytes < length)
 		return 0;
@@ -410,10 +388,8 @@ static ssize_t send_sample(const struct iio_channel *chn,
 static ssize_t receive_sample(const struct iio_channel *chn,
 		void *dst, size_t length, void *d)
 {
-	unsigned int number = get_channel_number(chn);
 	struct sample_cb_info *info = d;
-
-	if (iio_channel_get_index(chn) < 0 || !TEST_BIT(info->mask, number))
+	if (chn->index < 0 || !TEST_BIT(info->mask, chn->number))
 		return 0;
 	if (info->cpt == info->nb_bytes)
 		return 0;
@@ -440,7 +416,6 @@ static ssize_t send_data(struct DevEntry *dev, struct ThdEntry *thd, size_t len)
 {
 	struct parser_pdata *pdata = thd->pdata;
 	bool demux = server_demux && dev->sample_size != thd->sample_size;
-	void *start;
 
 	if (demux)
 		len = (len / dev->sample_size) * thd->sample_size;
@@ -453,20 +428,20 @@ static ssize_t send_data(struct DevEntry *dev, struct ThdEntry *thd, size_t len)
 		unsigned int i;
 		char buf[129], *ptr = buf;
 		uint32_t *mask = demux ? thd->mask : dev->mask;
-		ssize_t ret, length;
+		ssize_t ret, len;
 
-		length = sizeof(buf);
+		len = sizeof(buf);
 		/* Send the current mask */
 		for (i = dev->nb_words; i > 0 && ptr < buf + sizeof(buf);
 				i--, ptr += 8) {
-			snprintf(ptr, length, "%08x", mask[i - 1]);
-			length -= 8;
+			iio_snprintf(ptr, len, "%08x", mask[i - 1]);
+			len -= 8;
 		}
 
 		*ptr = '\n';
-		length--;
+		len--;
 
-		if (length < 0) {
+		if (len < 0) {
 			IIO_ERROR("send_data: string length error\n");
 			return -ENOSPC;
 		}
@@ -480,8 +455,7 @@ static ssize_t send_data(struct DevEntry *dev, struct ThdEntry *thd, size_t len)
 
 	if (!demux) {
 		/* Short path */
-		start = iio_buffer_start(dev->buf);
-		return write_all(pdata, start, len);
+		return write_all(pdata, dev->buf->buffer, len);
 	} else {
 		struct sample_cb_info info = {
 			.pdata = pdata,
@@ -507,11 +481,11 @@ static ssize_t receive_data(struct DevEntry *dev, struct ThdEntry *thd)
 	if (dev->sample_size == thd->sample_size) {
 		/* Short path: Receive directly in the buffer */
 
-		size_t len = dev->sample_size * dev->samples_count;
+		size_t len = dev->buf->length;
 		if (thd->nb < len)
 			len = thd->nb;
 
-		return read_all(pdata, iio_buffer_start(dev->buf), len);
+		return read_all(pdata, dev->buf->buffer, len);
 	} else {
 		/* Long path: Mux the samples to the buffer */
 
@@ -563,7 +537,7 @@ static void rw_thd(struct thread_pool *pool, void *d)
 	ssize_t ret = 0;
 
 	IIO_DEBUG("R/W thread started for device %s\n",
-		  dev_label_or_name_or_id(dev));
+			dev->name ? dev->name : dev->id);
 
 	while (true) {
 		bool has_readers = false, has_writers = false,
@@ -592,15 +566,14 @@ static void rw_thd(struct thread_pool *pool, void *d)
 			if (entry->buf)
 				iio_buffer_destroy(entry->buf);
 
-			for (i = 0; i < iio_device_get_channels_count(dev); i++) {
-				struct iio_channel *chn = iio_device_get_channel(dev, i);
-				unsigned int number = get_channel_number(chn);
-				long index = iio_channel_get_index(chn);
+			for (i = 0; i < dev->nb_channels; i++) {
+				struct iio_channel *chn = dev->channels[i];
+				long index = chn->index;
 
 				if (index < 0)
 					continue;
 
-				if (TEST_BIT(entry->mask, number))
+				if (TEST_BIT(entry->mask, chn->number))
 					iio_channel_enable(chn);
 				else
 					iio_channel_disable(chn);
@@ -624,13 +597,12 @@ static void rw_thd(struct thread_pool *pool, void *d)
 			}
 
 			IIO_DEBUG("IIO device %s reopened with new mask:\n",
-				  dev_label_or_name_or_id(dev));
+					dev->id);
 			for (i = 0; i < nb_words; i++)
 				IIO_DEBUG("Mask[%i] = 0x%08x\n", i, entry->mask[i]);
 			entry->update_mask = false;
 
 			entry->sample_size = iio_device_get_sample_size(dev);
-			entry->samples_count = samples_count;
 			mask_updated = true;
 		}
 
@@ -713,17 +685,8 @@ static void rw_thd(struct thread_pool *pool, void *d)
 
 			pthread_mutex_lock(&entry->thdlist_lock);
 
-			/* Reset the size of the buffer to its maximum size.
-			 *
-			 * XXX(pcercuei): There is no way to perform this with
-			 * the public libiio API. However, it probably does not
-			 * matter; we only need to reset the size of the buffer
-			 * if the buffer was used for receiving samples, and
-			 * to date there is no IIO device that supports both
-			 * receiving and sending samples.
-			 *
-			 * entry->buf->data_length = entry->buf->length;
-			 */
+			/* Reset the size of the buffer to its maximum size */
+			entry->buf->data_length = entry->buf->length;
 
 			/* Same comment as above */
 			for (thd = SLIST_FIRST(&entry->thdlist_head);
@@ -791,7 +754,7 @@ static void rw_thd(struct thread_pool *pool, void *d)
 	pthread_mutex_unlock(&devlist_lock);
 
 	IIO_DEBUG("Stopping R/W thread for device %s\n",
-		  dev_label_or_name_or_id(dev));
+			dev->name ? dev->name : dev->id);
 
 	dev_entry_put(entry);
 }
@@ -877,7 +840,7 @@ static uint32_t *get_mask(const char *mask, size_t *len)
 	ptr = words + nb;
 	while (*mask) {
 		char buf[9];
-		snprintf(buf, sizeof(buf), "%.*s", 8, mask);
+		iio_snprintf(buf, sizeof(buf), "%.*s", 8, mask);
 		sscanf(buf, "%08x", --ptr);
 		mask += 8;
 		IIO_DEBUG("Mask[%lu]: 0x%08x\n",
@@ -916,48 +879,6 @@ static void remove_thd_entry(struct ThdEntry *t)
 	free_thd_entry(t);
 }
 
-static ssize_t get_dev_sample_size_mask(const struct iio_device *dev,
-					const uint32_t *mask, size_t words)
-{
-	unsigned int i, len, number,
-		     nb_channels = iio_device_get_channels_count(dev);
-	const struct iio_channel *prev = NULL;
-	const struct iio_channel *chn;
-	const struct iio_data_format *fmt;
-	long index;
-	ssize_t size = 0;
-
-	if (words != (nb_channels + 31) / 32)
-		return -EINVAL;
-
-	for (i = 0; i < nb_channels; i++) {
-		chn = iio_device_get_channel(dev, i);
-		number = get_channel_number(chn);
-		fmt = iio_channel_get_data_format(chn);
-		index = iio_channel_get_index(chn);
-		len = fmt->length / 8 * fmt->repeat;
-
-		if (index < 0)
-			break;
-		if (!TEST_BIT(mask, number))
-			continue;
-
-		if (prev && index == iio_channel_get_index(prev)) {
-			prev = chn;
-			continue;
-		}
-
-		if (size % len)
-			size += 2 * len - (size % len);
-		else
-			size += len;
-
-		prev = chn;
-	}
-
-	return size;
-}
-
 static int open_dev_helper(struct parser_pdata *pdata, struct iio_device *dev,
 		size_t samples_count, const char *mask, bool cyclic)
 {
@@ -972,7 +893,7 @@ static int open_dev_helper(struct parser_pdata *pdata, struct iio_device *dev,
 	if (!dev)
 		return -ENODEV;
 
-	nb_channels = iio_device_get_channels_count(dev);
+	nb_channels = dev->nb_channels;
 	if (len != ((nb_channels + 31) / 32) * 8)
 		return -EINVAL;
 
@@ -988,7 +909,7 @@ static int open_dev_helper(struct parser_pdata *pdata, struct iio_device *dev,
 	thd->mask = words;
 	thd->nb = 0;
 	thd->samples_count = samples_count;
-	thd->sample_size = get_dev_sample_size_mask(dev, words, len);
+	thd->sample_size = iio_device_get_sample_size_mask(dev, words, len);
 	thd->pdata = pdata;
 	thd->dev = dev;
 	thd->eventfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
@@ -1339,13 +1260,12 @@ ssize_t get_trigger(struct parser_pdata *pdata, struct iio_device *dev)
 
 	ret = iio_device_get_trigger(dev, &trigger);
 	if (!ret && trigger) {
-		const char *name = iio_device_get_name(trigger);
 		char buf[256];
 
-		ret = strlen(name);
+		ret = strlen(trigger->name);
 		print_value(pdata, ret);
 
-		snprintf(buf, sizeof(buf), "%s\n", name);
+		iio_snprintf(buf, sizeof(buf), "%s\n", trigger->name);
 		ret = write_all(pdata, buf, ret + 1);
 	} else {
 		print_value(pdata, ret);
@@ -1363,8 +1283,6 @@ int set_timeout(struct parser_pdata *pdata, unsigned int timeout)
 int set_buffers_count(struct parser_pdata *pdata,
 		struct iio_device *dev, long value)
 {
-	unsigned int i, nb = (unsigned int) value;
-	struct timespec wait;
 	int ret = -EINVAL;
 
 	if (!dev) {
@@ -1372,24 +1290,9 @@ int set_buffers_count(struct parser_pdata *pdata,
 		goto err_print_value;
 	}
 
-	if (nb >= 1) {
-		/*
-		 * Avoid the same race condition described in open_dev_helper().
-		 * We must be sure that the buffer has not been enabled in order
-		 * to set the number of kernel buffers.
-		 */
-		for (i = 0; i < 500; i++) {
-			ret = iio_device_set_kernel_buffers_count(dev, nb);
-			if (ret != -EBUSY)
-				break;
-
-			wait.tv_sec = 0;
-			wait.tv_nsec = (100 * 1000);
-			do {
-				ret = nanosleep(&wait, &wait);
-			} while (ret == -1 && errno == EINTR);
-		}
-	}
+	if (value >= 1)
+		ret = iio_device_set_kernel_buffers_count(
+				dev, (unsigned int) value);
 err_print_value:
 	print_value(pdata, ret);
 	return ret;
@@ -1397,15 +1300,12 @@ err_print_value:
 
 ssize_t read_line(struct parser_pdata *pdata, char *buf, size_t len)
 {
-	size_t bytes_read = 0;
 	ssize_t ret;
-	bool found;
-
-	if (pdata->is_usb)
-	      return pdata->readfd(pdata, buf, len);
 
 	if (pdata->fd_in_is_socket) {
 		struct pollfd pfd[2];
+		bool found;
+		size_t bytes_read = 0;
 
 		pfd[0].fd = pdata->fd_in;
 		pfd[0].events = POLLIN | POLLRDHUP;
@@ -1448,31 +1348,21 @@ ssize_t read_line(struct parser_pdata *pdata, char *buf, size_t len)
 
 			bytes_read += to_trunc;
 		} while (!found && len);
+
+		/* No \n found? Just garbage data */
+		if (!found)
+			ret = -EIO;
+		else
+			ret = bytes_read;
 	} else {
-		while (len) {
-			ret = pdata->readfd(pdata, buf, 1);
-			if (ret < 0)
-			      return ret;
-
-			bytes_read++;
-
-			if (*buf == '\n')
-			      break;
-
-			len--;
-			buf++;
-		}
-
-		found = !!len;
+		ret = pdata->readfd(pdata, buf, len);
 	}
 
-	return found ? (ssize_t) bytes_read : -EIO;
+	return ret;
 }
 
 void interpreter(struct iio_context *ctx, int fd_in, int fd_out, bool verbose,
-		 bool is_socket, bool is_usb, bool use_aio,
-		 struct thread_pool *pool, const void *xml_zstd,
-		 size_t xml_zstd_len)
+	bool is_socket, bool use_aio, struct thread_pool *pool)
 {
 	yyscan_t scanner;
 	struct parser_pdata pdata;
@@ -1486,12 +1376,8 @@ void interpreter(struct iio_context *ctx, int fd_in, int fd_out, bool verbose,
 	pdata.verbose = verbose;
 	pdata.pool = pool;
 
-	pdata.xml_zstd = xml_zstd;
-	pdata.xml_zstd_len = xml_zstd_len;
-
 	pdata.fd_in_is_socket = is_socket;
 	pdata.fd_out_is_socket = is_socket;
-	pdata.is_usb = is_usb;
 
 	SLIST_INIT(&pdata.thdlist_head);
 
@@ -1536,8 +1422,8 @@ void interpreter(struct iio_context *ctx, int fd_in, int fd_out, bool verbose,
 	yylex_destroy(scanner);
 
 	/* Close all opened devices */
-	for (i = 0; i < iio_context_get_devices_count(ctx); i++)
-		close_dev_helper(&pdata, iio_context_get_device(ctx, i));
+	for (i = 0; i < ctx->nb_devices; i++)
+		close_dev_helper(&pdata, ctx->devices[i]);
 
 #if WITH_AIO
 	if (use_aio) {

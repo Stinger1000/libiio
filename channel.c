@@ -1,10 +1,20 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #include "debug.h"
 #include "iio-private.h"
@@ -51,18 +61,6 @@ static const char * const iio_chan_type_name_spec[] = {
 	[IIO_MASSCONCENTRATION] = "massconcentration",
 };
 
-static const char * const hwmon_chan_type_name_spec[] = {
-	[HWMON_VOLTAGE] = "in",
-	[HWMON_FAN] = "fan",
-	[HWMON_PWM] = "pwm",
-	[HWMON_TEMP] = "temp",
-	[HWMON_CURRENT] = "curr",
-	[HWMON_POWER] = "power",
-	[HWMON_ENERGY] = "energy",
-	[HWMON_HUMIDITY] = "humidity",
-	[HWMON_INTRUSION] = "intrusion",
-};
-
 static const char * const modifier_names[] = {
 	[IIO_MOD_X] = "x",
 	[IIO_MOD_Y] = "y",
@@ -102,18 +100,11 @@ static const char * const modifier_names[] = {
 	[IIO_MOD_CO2] = "co2",
 	[IIO_MOD_ETHANOL] = "ethanol",
 	[IIO_MOD_H2] = "h2",
-	[IIO_MOD_O2] = "o2",
 	[IIO_MOD_VOC] = "voc",
 	[IIO_MOD_PM1] = "pm1",
 	[IIO_MOD_PM2P5] = "pm2p5",
 	[IIO_MOD_PM4] = "pm4",
 	[IIO_MOD_PM10] = "pm10",
-	[IIO_MOD_LINEAR_X] = "x-g",
-	[IIO_MOD_LINEAR_Y] = "y-g",
-	[IIO_MOD_LINEAR_Z] = "z-g",
-	[IIO_MOD_PITCH] = "pitch",
-	[IIO_MOD_YAW] = "yaw",
-	[IIO_MOD_ROLL] = "roll",
 };
 
 /*
@@ -142,36 +133,6 @@ unsigned int find_channel_modifier(const char *s, size_t *len_p)
 	return IIO_NO_MOD;
 }
 
-static int iio_channel_find_type(const char *id,
-			const char *const *name_spec, size_t size)
-{
-	unsigned int i;
-	size_t len;
-
-	for (i = 0; i < size; i++) {
-		len = strlen(name_spec[i]);
-		if (strncmp(name_spec[i], id, len) != 0)
-		      continue;
-
-		/* Type must be followed by one of a '\0', a '_', or a digit */
-		if (id[len] != '\0' && id[len] != '_' &&
-				(id[len] < '0' || id[len] > '9'))
-			continue;
-
-		return i;
-	}
-
-	return -EINVAL;
-}
-
-#if WITH_HWMON
-bool iio_channel_is_hwmon(const char *id)
-{
-	return iio_channel_find_type(id, hwmon_chan_type_name_spec,
-				ARRAY_SIZE(hwmon_chan_type_name_spec)) >= 0;
-}
-#endif /* WITH_HWMON */
-
 /*
  * Initializes all auto-detected fields of the channel struct. Must be called
  * after the channel has been otherwise fully initialized.
@@ -181,18 +142,21 @@ void iio_channel_init_finalize(struct iio_channel *chn)
 	unsigned int i;
 	size_t len;
 	char *mod;
-	int type;
 
-	if (iio_device_is_hwmon(chn->dev)) {
-		type = iio_channel_find_type(chn->id, hwmon_chan_type_name_spec,
-					ARRAY_SIZE(hwmon_chan_type_name_spec));
-	} else {
-		type = iio_channel_find_type(chn->id, iio_chan_type_name_spec,
-					ARRAY_SIZE(iio_chan_type_name_spec));
-	}
-
-	chn->type = (type >= 0) ? type : IIO_CHAN_TYPE_UNKNOWN;
+	chn->type = IIO_CHAN_TYPE_UNKNOWN;
 	chn->modifier = IIO_NO_MOD;
+
+	for (i = 0; i < ARRAY_SIZE(iio_chan_type_name_spec); i++) {
+		len = strlen(iio_chan_type_name_spec[i]);
+		if (strncmp(iio_chan_type_name_spec[i], chn->id, len) != 0)
+			continue;
+		/* Type must be followed by one of a '\0', a '_', or a digit */
+		if (chn->id[len] != '\0' && chn->id[len] != '_' &&
+				(chn->id[len] < '0' || chn->id[len] > '9'))
+			continue;
+
+		chn->type = (enum iio_chan_type) i;
+	}
 
 	mod = strchr(chn->id, '_');
 	if (!mod)
@@ -212,92 +176,168 @@ void iio_channel_init_finalize(struct iio_channel *chn)
 	}
 }
 
-static ssize_t iio_snprintf_chan_attr_xml(char *str, ssize_t len,
-					  struct iio_channel_attr *attr)
+static char *get_attr_xml(struct iio_channel_attr *attr, size_t *length)
 {
-	ssize_t ret, alen = 0;
+	char *str;
+	size_t len;
 
-	if (!attr->filename)
-		return iio_snprintf(str, len, "<attribute name=\"%s\" />", attr->name);
+	len = strnlen(attr->name, MAX_ATTR_NAME);
+	len += sizeof("<attribute name=\"\" />") - 1;
 
-	ret = iio_snprintf(str, len, "<attribute name=\"%s\" ", attr->name);
-	if (ret < 0)
-		return ret;
+	if (attr->filename) {
+		len += strnlen(attr->filename, NAME_MAX);
+		len += sizeof(" filename=\"\"") - 1;
+	}
 
-	iio_update_xml_indexes(ret, &str, &len, &alen);
+	*length = len; /* just the chars */
+	len++;         /* room for terminating NULL */
+	str = malloc(len);
+	if (!str)
+		return NULL;
 
-	ret = iio_xml_print_and_sanitized_param(str, len, "filename=\"",
-						attr->filename, "\" />");
-	if (ret < 0)
-		return ret;
+	if (attr->filename)
+		iio_snprintf(str, len, "<attribute name=\"%s\" filename=\"%s\" />",
+				attr->name, attr->filename);
+	else
+		iio_snprintf(str, len, "<attribute name=\"%s\" />", attr->name);
 
-	return alen + ret;
+	return str;
 }
 
-static ssize_t iio_snprintf_scan_element_xml(char *str, ssize_t len,
-					     const struct iio_channel *chn)
+static char * get_scan_element(const struct iio_channel *chn, size_t *length)
 {
+	char buf[1024], repeat[12] = "", *str;
 	char processed = (chn->format.is_fully_defined ? 'A' - 'a' : 0);
-	char repeat[12] = "", scale[48] = "";
 
 	if (chn->format.repeat > 1)
 		iio_snprintf(repeat, sizeof(repeat), "X%u", chn->format.repeat);
 
-	if (chn->format.with_scale)
-		iio_snprintf(scale, sizeof(scale), "scale=\"%f\" ", chn->format.scale);
-
-	return iio_snprintf(str, len,
-			"<scan-element index=\"%li\" format=\"%ce:%c%u/%u%s&gt;&gt;%u\" %s/>",
+	iio_snprintf(buf, sizeof(buf), "<scan-element index=\"%li\" "
+			"format=\"%ce:%c%u/%u%s&gt;&gt;%u\" />",
 			chn->index, chn->format.is_be ? 'b' : 'l',
 			chn->format.is_signed ? 's' + processed : 'u' + processed,
 			chn->format.bits, chn->format.length, repeat,
-			chn->format.shift, scale);
-}
+			chn->format.shift);
 
-ssize_t iio_snprintf_channel_xml(char *ptr, ssize_t len,
-				 const struct iio_channel *chn)
-{
-	ssize_t ret, alen = 0;
-	unsigned int i;
-
-
-	ret = iio_xml_print_and_sanitized_param(ptr, len, "<channel id=\"",
-						chn->id, "\"");
-	if (ret < 0)
-		return ret;
-	iio_update_xml_indexes(ret, &ptr, &len, &alen);
-
-	if (chn->name) {
-		ret = iio_snprintf(ptr, len, " name=\"%s\"", chn->name);
-		if (ret < 0)
-			return ret;
-		iio_update_xml_indexes(ret, &ptr, &len, &alen);
+	if (chn->format.with_scale) {
+		char *ptr = strrchr(buf, '\0');
+		iio_snprintf(ptr - 2, buf + sizeof(buf) - ptr + 2,
+				"scale=\"%f\" />", chn->format.scale);
 	}
 
-	ret = iio_snprintf(ptr, len, " type=\"%s\" >", chn->is_output ? "output" : "input");
-	if (ret < 0)
-		return ret;
-	iio_update_xml_indexes(ret, &ptr, &len, &alen);
+	str = iio_strdup(buf);
+	if (str)
+		*length = strlen(str);
+	return str;
+}
+
+/* Returns a string containing the XML representation of this channel */
+char * iio_channel_get_xml(const struct iio_channel *chn, size_t *length)
+{
+	ssize_t len;
+	char *ptr, *eptr, *str, **attrs, *scan_element = NULL;
+	size_t *attrs_len, scan_element_len = 0;
+	unsigned int i;
+
+	len = sizeof("<channel id=\"\" type=\"\" ></channel>") - 1;
+	len += strnlen(chn->id, MAX_CHN_ID);
+	len += (chn->is_output ? sizeof("output") : sizeof("input")) - 1;
+	if (chn->name) {
+		len += sizeof(" name=\"\"") - 1;
+		len += strnlen(chn->name, MAX_CHN_NAME);
+	}
 
 	if (chn->is_scan_element) {
-		ret = iio_snprintf_scan_element_xml(ptr, len, chn);
-		if (ret < 0)
-			return ret;
-		iio_update_xml_indexes(ret, &ptr, &len, &alen);
+		scan_element = get_scan_element(chn, &scan_element_len);
+		if (!scan_element)
+			return NULL;
+		else
+			len += scan_element_len;
+	}
+
+	attrs_len = malloc(chn->nb_attrs * sizeof(*attrs_len));
+	if (!attrs_len)
+		goto err_free_scan_element;
+
+	attrs = malloc(chn->nb_attrs * sizeof(*attrs));
+	if (!attrs)
+		goto err_free_attrs_len;
+
+	for (i = 0; i < chn->nb_attrs; i++) {
+		char *xml = get_attr_xml(&chn->attrs[i], &attrs_len[i]);
+		if (!xml)
+			goto err_free_attrs;
+		attrs[i] = xml;
+		len += attrs_len[i];
+	}
+
+	len++;  /* room for terminating NULL */
+	str = malloc(len);
+	if (!str)
+		goto err_free_attrs;
+	ptr = str;
+	eptr = str + len;
+
+	if (len > 0) {
+		ptr += iio_snprintf(str, len, "<channel id=\"%s\"", chn->id);
+		len = eptr - ptr;
+	}
+
+	if (chn->name && len > 0) {
+		ptr += iio_snprintf(ptr, len, " name=\"%s\"", chn->name);
+		len = eptr - ptr;
+	}
+
+	if (len > 0) {
+		ptr += iio_snprintf(ptr, len, " type=\"%s\" >", chn->is_output ? "output" : "input");
+		len = eptr - ptr;
+	}
+
+	if (chn->is_scan_element && len > (ssize_t) scan_element_len) {
+		memcpy(ptr, scan_element, scan_element_len); /* Flawfinder: ignore */
+		ptr += scan_element_len;
+		len -= scan_element_len;
 	}
 
 	for (i = 0; i < chn->nb_attrs; i++) {
-		ret = iio_snprintf_chan_attr_xml(ptr, len, &chn->attrs[i]);
-		if (ret < 0)
-			return ret;
-		iio_update_xml_indexes(ret, &ptr, &len, &alen);
+		if (len > (ssize_t) attrs_len[i]) {
+			memcpy(ptr, attrs[i], attrs_len[i]); /* Flawfinder: ignore */
+			ptr += attrs_len[i];
+			len -= attrs_len[i];
+		}
+		free(attrs[i]);
 	}
 
-	ret = iio_snprintf(ptr, len, "</channel>");
-	if (ret < 0)
-		return ret;
+	free(scan_element);
+	free(attrs);
+	free(attrs_len);
 
-	return alen + ret;
+	if (len > 0) {
+		ptr += iio_strlcpy(ptr, "</channel>", len);
+		len -= sizeof("</channel>") -1;
+	}
+
+	*length = ptr - str;
+
+	/* NULL char should be left, and that is it */
+	if (len != 1) {
+		IIO_ERROR("Internal libIIO error: iio_channel_get_xml str length issue\n");
+		free(str);
+		return NULL;
+	}
+
+	return str;
+
+err_free_attrs:
+	while (i--)
+		free(attrs[i]);
+	free(attrs);
+err_free_attrs_len:
+	free(attrs_len);
+err_free_scan_element:
+	if (chn->is_scan_element)
+		free(scan_element);
+	return NULL;
 }
 
 const char * iio_channel_get_id(const struct iio_channel *chn)
@@ -428,9 +468,12 @@ void free_channel(struct iio_channel *chn)
 		free(chn->attrs[i].name);
 		free(chn->attrs[i].filename);
 	}
-	free(chn->attrs);
-	free(chn->name);
-	free(chn->id);
+	if (chn->nb_attrs)
+		free(chn->attrs);
+	if (chn->name)
+		free(chn->name);
+	if (chn->id)
+		free(chn->id);
 	free(chn);
 }
 
@@ -446,7 +489,11 @@ static void shift_bits(uint8_t *dst, size_t shift, size_t len, bool left)
 	size_t i, shift_bytes = shift / 8;
 	shift %= 8;
 
-	if (is_little_endian() ^ left)
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	if (!left)
+#else
+	if (left)
+#endif
 	{
 		if (shift_bytes) {
 			memmove(dst, dst + shift_bytes, len - shift_bytes);
@@ -454,15 +501,15 @@ static void shift_bits(uint8_t *dst, size_t shift, size_t len, bool left)
 		}
 		if (shift) {
 			for (i = 0; i < len; i++) {
-				if (is_little_endian()) {
-					dst[i] >>= shift;
-					if (i < len - 1)
-						dst[i] |= dst[i + 1] << (8 - shift);
-				} else {
-					dst[i] <<= shift;
-					if (i < len - 1)
-						dst[i] |= dst[i + 1] >> (8 - shift);
-				}
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+				dst[i] >>= shift;
+				if (i < len - 1)
+					dst[i] |= dst[i + 1] << (8 - shift);
+#else
+				dst[i] <<= shift;
+				if (i < len - 1)
+					dst[i] |= dst[i + 1] >> (8 - shift);
+#endif
 			}
 		}
 	} else {
@@ -472,15 +519,15 @@ static void shift_bits(uint8_t *dst, size_t shift, size_t len, bool left)
 		}
 		if (shift) {
 			for (i = len; i > 0; i--) {
-				if (is_little_endian()) {
-					dst[i - 1] <<= shift;
-					if (i > 1)
-						dst[i - 1] |= dst[i - 2] >> (8 - shift);
-				} else {
-					dst[i - 1] >>= shift;
-					if (i > 1)
-						dst[i - 1] |= dst[i - 2] << (8 - shift);
-				}
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+				dst[i - 1] <<= shift;
+				if (i > 1)
+					dst[i - 1] |= dst[i - 2] >> (8 - shift);
+#else
+				dst[i - 1] >>= shift;
+				if (i > 1)
+					dst[i - 1] |= dst[i - 2] << (8 - shift);
+#endif
 			}
 		}
 	}
@@ -491,22 +538,22 @@ static void sign_extend(uint8_t *dst, size_t bits, size_t len)
 	size_t upper_bytes = ((len * 8 - bits) / 8);
 	uint8_t msb, msb_bit = 1 << ((bits - 1) % 8);
 
-	if (is_little_endian()) {
-		msb = dst[len - 1 - upper_bytes] & msb_bit;
-		if (upper_bytes)
-			memset(dst + len - upper_bytes, msb ? 0xff : 0x00, upper_bytes);
-		if (msb)
-			dst[len - 1 - upper_bytes] |= ~(msb_bit - 1);
-		else
-			dst[len - 1 - upper_bytes] &= (msb_bit - 1);
-	} else {
-		/* XXX: untested */
-		msb = dst[upper_bytes] & msb_bit;
-		if (upper_bytes)
-			memset(dst, msb ? 0xff : 0x00, upper_bytes);
-		if (msb)
-			dst[upper_bytes] |= ~(msb_bit - 1);
-	}
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	msb = dst[len - 1 - upper_bytes] & msb_bit;
+	if (upper_bytes)
+		memset(dst + len - upper_bytes, msb ? 0xff : 0x00, upper_bytes);
+	if (msb)
+		dst[len - 1 - upper_bytes] |= ~(msb_bit - 1);
+	else
+		dst[len - 1 - upper_bytes] &= (msb_bit - 1);
+#else
+	/* XXX: untested */
+	msb = dst[upper_bytes] & msb_bit;
+	if (upper_bytes)
+		memset(dst, msb ? 0xff : 0x00, upper_bytes);
+	if (msb)
+		dst[upper_bytes] |= ~(msb_bit - 1);
+#endif
 }
 
 static void mask_upper_bits(uint8_t *dst, size_t bits, size_t len)
@@ -530,7 +577,11 @@ void iio_channel_convert(const struct iio_channel *chn,
 	unsigned int len = chn->format.length / 8;
 	ptrdiff_t end = len * chn->format.repeat;
 	uintptr_t end_ptr = src_ptr + end;
-	bool swap = is_little_endian() ^ !chn->format.is_be;
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	bool swap = chn->format.is_be;
+#else
+	bool swap = !chn->format.is_be;
+#endif
 
 	for (src_ptr = (uintptr_t) src; src_ptr < end_ptr;
 			src_ptr += len, dst_ptr += len) {
@@ -562,7 +613,11 @@ void iio_channel_convert_inverse(const struct iio_channel *chn,
 	unsigned int len = chn->format.length / 8;
 	ptrdiff_t end = len * chn->format.repeat;
 	uintptr_t end_ptr = dst_ptr + end;
-	bool swap = is_little_endian() ^ !chn->format.is_be;
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	bool swap = chn->format.is_be;
+#else
+	bool swap = !chn->format.is_be;
+#endif
 	uint8_t buf[1024];
 
 	/* Somehow I doubt we will have samples of 8192 bits each. */

@@ -1,34 +1,50 @@
-/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #ifndef __IIO_PRIVATE_H__
 #define __IIO_PRIVATE_H__
 
 /* Include public interface */
 #include "iio.h"
-#include "iio-backend.h"
+
 #include "iio-config.h"
 
 #include <stdbool.h>
 
 #ifdef _MSC_BUILD
 #define inline __inline
+#define iio_snprintf sprintf_s
 #define iio_sscanf sscanf_s
 #else
+#define iio_snprintf snprintf
 #define iio_sscanf sscanf
 #endif
 
-#if defined(__MINGW32__)
-#   define __iio_printf __attribute__((__format__(gnu_printf, 3, 4)))
-#elif defined(__GNUC__)
-#   define __iio_printf __attribute__((__format__(printf, 3, 4)))
+#ifdef _WIN32
+#   ifdef LIBIIO_EXPORTS
+#	define __api __declspec(dllexport)
+#   else
+#	define __api __declspec(dllimport)
+#   endif
+#elif __GNUC__ >= 4
+#   define __api __attribute__((visibility ("default")))
 #else
-#   define __iio_printf
+#   define __api
 #endif
 
 #define ARRAY_SIZE(x) (sizeof(x) ? sizeof(x) / sizeof((x)[0]) : 0)
@@ -65,28 +81,22 @@
 #define MAX_CTX_NAME   NAME_MAX  /* nominally "xml" */
 #define MAX_CTX_DESC   NAME_MAX  /* nominally "linux ..." */
 #define MAX_ATTR_NAME  NAME_MAX  /* encoded in the sysfs filename */
-#define MAX_ATTR_VALUE (8 * PAGESIZE)  /* 8x Linux page size, could be anything */
-
-#ifdef _MSC_BUILD
-/* Windows only runs on little-endian systems */
-#define is_little_endian() true
-#else
-#define is_little_endian() (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-#endif
+#define MAX_ATTR_VALUE PAGESIZE  /* Linux page size, could be anything */
 
 /* ntohl/htonl are a nightmare to use in cross-platform applications,
  * since they are defined in different headers on different platforms.
  * iio_be32toh/iio_htobe32 are just clones of ntohl/htonl. */
 static inline uint32_t iio_be32toh(uint32_t word)
 {
-	if (!is_little_endian())
-		return word;
-
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #ifdef __GNUC__
 	return __builtin_bswap32(word);
 #else
 	return ((word & 0xff) << 24) | ((word & 0xff00) << 8) |
 		((word >> 8) & 0xff00) | ((word >> 24) & 0xff);
+#endif
+#else
+	return word;
 #endif
 }
 
@@ -101,20 +111,54 @@ static inline void *zalloc(size_t size)
 	return calloc(1, size);
 }
 
-static inline __check_ret bool IS_ERR(const void *ptr)
-{
-	return (uintptr_t)ptr >= (uintptr_t)-4095;
-}
+enum iio_attr_type {
+	IIO_ATTR_TYPE_DEVICE = 0,
+	IIO_ATTR_TYPE_DEBUG,
+	IIO_ATTR_TYPE_BUFFER,
+};
 
-static inline __check_ret int PTR_ERR(const void *ptr)
-{
-	return (int)(intptr_t) ptr;
-}
+struct iio_backend_ops {
+	struct iio_context * (*clone)(const struct iio_context *ctx);
+	ssize_t (*read)(const struct iio_device *dev, void *dst, size_t len,
+			uint32_t *mask, size_t words);
+	ssize_t (*write)(const struct iio_device *dev,
+			const void *src, size_t len);
+	int (*open)(const struct iio_device *dev,
+			size_t samples_count, bool cyclic);
+	int (*close)(const struct iio_device *dev);
+	int (*get_fd)(const struct iio_device *dev);
+	int (*set_blocking_mode)(const struct iio_device *dev, bool blocking);
 
-static inline __check_ret void * ERR_PTR(int err)
-{
-	return (void *)(intptr_t) err;
-}
+	void (*cancel)(const struct iio_device *dev);
+
+	int (*set_kernel_buffers_count)(const struct iio_device *dev,
+			unsigned int nb_blocks);
+	ssize_t (*get_buffer)(const struct iio_device *dev,
+			void **addr_ptr, size_t bytes_used,
+			uint32_t *mask, size_t words);
+
+	ssize_t (*read_device_attr)(const struct iio_device *dev,
+			const char *attr, char *dst, size_t len, enum iio_attr_type);
+	ssize_t (*write_device_attr)(const struct iio_device *dev,
+			const char *attr, const char *src,
+			size_t len, enum iio_attr_type);
+	ssize_t (*read_channel_attr)(const struct iio_channel *chn,
+			const char *attr, char *dst, size_t len);
+	ssize_t (*write_channel_attr)(const struct iio_channel *chn,
+			const char *attr, const char *src, size_t len);
+
+	int (*get_trigger)(const struct iio_device *dev,
+			const struct iio_device **trigger);
+	int (*set_trigger)(const struct iio_device *dev,
+			const struct iio_device *trigger);
+
+	void (*shutdown)(struct iio_context *ctx);
+
+	int (*get_version)(const struct iio_context *ctx, unsigned int *major,
+			unsigned int *minor, char git_tag[8]);
+
+	int (*set_timeout)(struct iio_context *ctx, unsigned int timeout);
+};
 
 /*
  * If these structures are updated, the qsort functions defined in sort.c
@@ -124,6 +168,7 @@ static inline __check_ret void * ERR_PTR(int err)
 struct iio_context_pdata;
 struct iio_device_pdata;
 struct iio_channel_pdata;
+struct iio_scan_backend_context;
 
 struct iio_channel_attr {
 	char *name;
@@ -135,10 +180,6 @@ struct iio_context {
 	const struct iio_backend_ops *ops;
 	const char *name;
 	char *description;
-
-	unsigned int major;
-	unsigned int minor;
-	char *git_tag;
 
 	struct iio_device **devices;
 	unsigned int nb_devices;
@@ -169,21 +210,21 @@ struct iio_channel {
 	unsigned int number;
 };
 
-struct iio_dev_attrs {
-	char **names;
-	unsigned int num;
-};
-
 struct iio_device {
 	const struct iio_context *ctx;
 	struct iio_device_pdata *pdata;
 	void *userdata;
 
-	char *name, *id, *label;
+	char *name, *id;
 
-	struct iio_dev_attrs attrs;
-	struct iio_dev_attrs buffer_attrs;
-	struct iio_dev_attrs debug_attrs;
+	char **attrs;
+	unsigned int nb_attrs;
+
+	char **buffer_attrs;
+	unsigned int nb_buffer_attrs;
+
+	char **debug_attrs;
+	unsigned int nb_debug_attrs;
 
 	struct iio_channel **channels;
 	unsigned int nb_channels;
@@ -200,7 +241,7 @@ struct iio_buffer {
 	uint32_t *mask;
 	unsigned int dev_sample_size;
 	unsigned int sample_size;
-	bool dev_is_high_speed;
+	bool is_output, dev_is_high_speed;
 };
 
 struct iio_context_info {
@@ -213,17 +254,17 @@ struct iio_scan_result {
 	struct iio_context_info **info;
 };
 
-struct iio_context_info *
-iio_scan_result_add(struct iio_scan_result *scan_result);
+struct iio_context_info ** iio_scan_result_add(
+	struct iio_scan_result *scan_result, size_t num);
 
 void free_channel(struct iio_channel *chn);
 void free_device(struct iio_device *dev);
 
-ssize_t iio_snprintf_channel_xml(char *str, ssize_t slen,
-				 const struct iio_channel *chn);
-ssize_t iio_snprintf_device_xml(char *str, ssize_t slen,
-				const struct iio_device *dev);
+char *iio_channel_get_xml(const struct iio_channel *chn, size_t *len);
+char *iio_device_get_xml(const struct iio_device *dev, size_t *len);
 
+char *encode_xml_ndup(const char * input);
+char *iio_context_create_xml(const struct iio_context *ctx);
 int iio_context_init(struct iio_context *ctx);
 
 bool iio_device_is_tx(const struct iio_device *dev);
@@ -244,53 +285,39 @@ struct iio_context * local_create_context(void);
 struct iio_context * network_create_context(const char *hostname);
 struct iio_context * xml_create_context_mem(const char *xml, size_t len);
 struct iio_context * xml_create_context(const char *xml_file);
+struct iio_context * usb_create_context(unsigned int bus, uint16_t address,
+		uint16_t intrfc);
 struct iio_context * usb_create_context_from_uri(const char *uri);
 struct iio_context * serial_create_context_from_uri(const char *uri);
 
 int local_context_scan(struct iio_scan_result *scan_result);
 
-int usb_context_scan(struct iio_scan_result *scan_result, const char *args);
+struct iio_scan_backend_context * usb_context_scan_init(void);
+void usb_context_scan_free(struct iio_scan_backend_context *ctx);
 
-int dnssd_context_scan(struct iio_scan_result *scan_result);
+int usb_context_scan(struct iio_scan_backend_context *ctx,
+		struct iio_scan_result *scan_result);
 
-ssize_t iio_device_get_sample_size_mask(const struct iio_device *dev,
+struct iio_scan_backend_context * dnssd_context_scan_init(void);
+void dnssd_context_scan_free(struct iio_scan_backend_context *ctx);
+
+int dnssd_context_scan(struct iio_scan_backend_context *ctx,
+		struct iio_scan_result *scan_result);
+
+/* This function is not part of the API, but is used by the IIO daemon */
+__api ssize_t iio_device_get_sample_size_mask(const struct iio_device *dev,
 		const uint32_t *mask, size_t words);
 
 void iio_channel_init_finalize(struct iio_channel *chn);
 unsigned int find_channel_modifier(const char *s, size_t *len_p);
 
 char *iio_strdup(const char *str);
-char *iio_strndup(const char *str, size_t n);
-char *iio_strtok_r(char *str, const char *delim, char **saveptr);
 size_t iio_strlcpy(char * __restrict dst, const char * __restrict src, size_t dsize);
 char * iio_getenv (char * envvar);
-
-int iio_context_add_device(struct iio_context *ctx, struct iio_device *dev);
 
 int iio_context_add_attr(struct iio_context *ctx,
 		const char *key, const char *value);
 
-struct iio_context_pdata * iio_context_get_pdata(const struct iio_context *ctx);
-
-int add_iio_dev_attr(struct iio_dev_attrs *attrs, const char *attr,
-		     const char *type, const char *dev_id);
-
-ssize_t __iio_printf iio_snprintf(char *buf, size_t len, const char *fmt, ...);
-
-ssize_t iio_xml_print_and_sanitized_param(char *ptr, ssize_t len,
-					  const char *before, char *param,
-					  const char *after);
-
-static inline void iio_update_xml_indexes(ssize_t ret, char **ptr, ssize_t *len,
-					  ssize_t *alen)
-{
-	if (*ptr) {
-		*ptr += ret;
-		*len -= ret;
-	}
-	*alen += ret;
-}
-
-bool iio_channel_is_hwmon(const char *id);
+#undef __api
 
 #endif /* __IIO_PRIVATE_H__ */

@@ -1,10 +1,20 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #define _DEFAULT_SOURCE
 
@@ -22,10 +32,6 @@
 #ifdef __APPLE__
 	/* Needed for sysctlbyname */
 #include <sys/sysctl.h>
-#endif
-
-#ifdef _WIN32
-#include <sysinfoapi.h>
 #endif
 
 #include "iio_common.h"
@@ -100,15 +106,15 @@ static const struct option options[] = {
 	{"uri", required_argument, 0, 'u'},
 	{"buffer-size", required_argument, 0, 'b'},
 	{"samples", required_argument, 0, 's' },
-	{"Timeout", required_argument, 0, 'T'},
-	{"threads", required_argument, 0, 't'},
+	{"timeout", required_argument, 0, 't'},
+	{"Threads", required_argument, 0, 'T'},
 	{"verbose", no_argument, 0, 'v'},
 	{0, 0, 0, 0},
 };
 
 static const char *options_descriptions[] = {
-	("[-n <hostname>] [-u <vid>:<pid>] [-t <trigger>] [-b <buffer-size>] [-s <samples>]"
-		"<iio_device> [<channel> ...]"),
+	"[-n <hostname>] [-u <vid>:<pid>] [-t <trigger>] [-b <buffer-size>] [-s <samples>]"
+		"<iio_device> [<channel> ...]",
 	"Show this help and quit.",
 	"Use the context at the provided URI.",
 	"Size of the capture buffer. Default is 256.",
@@ -213,7 +219,7 @@ static void thread_err(int id, ssize_t ret, char * what)
 	if (ret < 0) {
 		char err_str[1024];
 		iio_strerror(-ret, err_str, sizeof(err_str)); \
-		fprintf(stderr, "%i : IIO ERROR : %s : %s\n", id, what, err_str); \
+		fprintf(stderr, "%i : IIO ERROR : %s : %s (%zd)\n", id, what, err_str, ret); \
 	}
 }
 
@@ -424,13 +430,13 @@ int main(int argc, char **argv)
 			info.buffer_size = sanitize_clamp("buffersize", info.argv[info.arg_index],
 					min_samples, 1024 * 1024 * 4);
 			break;
-		case 'T':
+		case 't':
 			info.arg_index +=2;
 			/* ensure between least once a day and never (0) */
 			info.timeout = 1000 * sanitize_clamp("timeout", info.argv[info.arg_index],
 					0, 60 * 60 * 24);
 			break;
-		case 't':
+		case 'T':
 			info.arg_index +=2;
 			/* Max number threads 1024, min 1 */
 			info.num_threads = sanitize_clamp("threads", info.argv[info.arg_index],

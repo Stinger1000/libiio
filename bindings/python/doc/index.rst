@@ -10,7 +10,7 @@ The libiio python bindings can be installed from pip
 
 .. code-block:: bash
 
-  (sudo) pip install pylibiio
+  (sudo) pip install libiio
 
 or by grabbing the source directly
 

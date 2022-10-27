@@ -1,11 +1,21 @@
 %{
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #include "parser.h"
 #include "ops.h"
@@ -30,10 +40,6 @@ WORD (([[:alpha:]]+,)|(iio:))?(-|_|\.|[[:alnum:]])+
 
 <INITIAL>PRINT|print {
 	return PRINT;
-}
-
-<INITIAL>ZPRINT|zprint {
-	return ZPRINT;
 }
 
 <INITIAL>EXIT|exit|QUIT|quit {
@@ -143,7 +149,7 @@ WORD (([[:alpha:]]+,)|(iio:))?(-|_|\.|[[:alnum:]])+
 	errno = 0;
 	yylval->value = strtol(yytext, &end, 10);
 	if (yytext == end || errno == ERANGE) {
-		snprintf(errstr, sizeof(errstr), "lex : bad long constant: %s",(char*)yytext);
+		sprintf(errstr,"lex : bad long constant: %s",(char*)yytext);
 		perror(errstr);
 	}
 	return VALUE;

@@ -1,21 +1,30 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 /* Force the XSI version of strerror_r */
 #undef _GNU_SOURCE
 
-#include "dns_sd.h"
 #include "iio-config.h"
 #include "iio-private.h"
+#include "network.h"
 
 #include <errno.h>
 #include <locale.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,21 +216,6 @@ void iio_strerror(int err, char *buf, size_t len)
 #endif
 	if (ret != 0)
 		iio_snprintf(buf, len, "Unknown error %i", err);
-	else {
-		size_t i = strnlen(buf, len);
-		iio_snprintf(buf + i, len - i, " (%i)", err);
-	}
-}
-
-char *iio_strtok_r(char *str, const char *delim, char **saveptr)
-{
-#if defined(_WIN32)
-	return strtok_s(str, delim, saveptr);
-#elif defined(HAS_STRTOK_R)
-	return strtok_r(str, delim, saveptr);
-#else
-#error Need a implentation of strtok_r for this platform
-#endif
 }
 
 char *iio_strdup(const char *str)
@@ -236,24 +230,6 @@ char *iio_strdup(const char *str)
 
 	if (buf)
 		memcpy(buf, str, len + 1);
-	return buf;
-#endif
-}
-
-/* strndup conforms to POSIX.1-2008; but Windows does not provided it
- */
-char *iio_strndup(const char *str, size_t n)
-{
-#ifdef HAS_STRNDUP
-	return strndup(str, n);
-#else
-	size_t len = strnlen(str, n);
-	char *buf = malloc(len + 1);
-	if (buf) {
-		/* len = size of buf, so memcpy is OK */
-		memcpy(buf, str, len); /* Flawfinder: ignore */
-		buf[len] = 0;
-	}
 	return buf;
 #endif
 }
@@ -321,11 +297,11 @@ char * iio_getenv (char * envvar)
 	if (!hostname)
 		return NULL;
 
-	tmp = FQDN_LEN + sizeof("serial:") + sizeof(":65535") - 2;
+	tmp = MAXHOSTNAMELEN + sizeof("serial:") + sizeof(":65535") - 2;
 	len = strnlen(hostname, tmp);
 
 	/* Should be smaller than max length */
-	if (len == tmp)
+	if (len <= tmp)
 		goto wrong_str;
 
 	/* should be more than "usb:" or "ip:" */
@@ -344,18 +320,4 @@ wrong_str:
 	free(hostname);
 #endif
 	return NULL;
-}
-
-ssize_t __iio_printf iio_snprintf(char *buf, size_t len, const char *fmt, ...)
-{
-	va_list ap;
-	int ret;
-
-	va_start(ap, fmt);
-	ret = vsnprintf(buf, len, fmt, ap);
-	if (len && ret >= (ssize_t)len)
-		ret = -ERANGE;
-	va_end(ap);
-
-	return (ssize_t)ret;
 }

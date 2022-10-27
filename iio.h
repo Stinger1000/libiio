@@ -1,10 +1,20 @@
-/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 /** @file iio.h
  * @brief Public interface */
@@ -62,9 +72,7 @@ typedef ptrdiff_t ssize_t;
 #endif
 
 #ifdef _WIN32
-#   ifdef LIBIIO_STATIC
-#	define __api
-#   elif defined(LIBIIO_EXPORTS)
+#   ifdef LIBIIO_EXPORTS
 #	define __api __declspec(dllexport)
 #   else
 #	define __api __declspec(dllimport)
@@ -83,13 +91,6 @@ struct iio_buffer;
 struct iio_context_info;
 struct iio_scan_context;
 struct iio_scan_block;
-
-/*
- * <linux/iio/types.h> header guard to protect these enums from being defined
- * twice
- */
-#ifndef _IIO_TYPES_H_
-#define _IIO_TYPES_H_
 
 /**
  * @enum iio_chan_type
@@ -189,49 +190,7 @@ enum iio_modifier {
 	IIO_MOD_PM10,
 	IIO_MOD_ETHANOL,
 	IIO_MOD_H2,
-	IIO_MOD_O2,
-	IIO_MOD_LINEAR_X,
-	IIO_MOD_LINEAR_Y,
-	IIO_MOD_LINEAR_Z,
-	IIO_MOD_PITCH,
-	IIO_MOD_YAW,
-	IIO_MOD_ROLL,
 };
-
-/**
- * @enum iio_event_type
- * @brief IIO event type
- *
- * Some IIO devices can deliver events. The type of the event can be specified
- * by one of the iio_event_type values.
- */
-enum iio_event_type {
-	IIO_EV_TYPE_THRESH,
-	IIO_EV_TYPE_MAG,
-	IIO_EV_TYPE_ROC,
-	IIO_EV_TYPE_THRESH_ADAPTIVE,
-	IIO_EV_TYPE_MAG_ADAPTIVE,
-	IIO_EV_TYPE_CHANGE,
-	IIO_EV_TYPE_MAG_REFERENCED,
-	IIO_EV_TYPE_GESTURE,
-};
-
-/**
- * @enum iio_event_direction
- * @brief IIO event direction
- *
- * When applicable, this enum specifies the direction of the iio_event_type.
- */
-enum iio_event_direction {
-	IIO_EV_DIR_EITHER,
-	IIO_EV_DIR_RISING,
-	IIO_EV_DIR_FALLING,
-	IIO_EV_DIR_NONE,
-	IIO_EV_DIR_SINGLETAP,
-	IIO_EV_DIR_DOUBLETAP,
-};
-
-#endif /* _IIO_TYPES_H_ */
 
 /* ---------------------------------------------------------------------------*/
 /* ------------------------- Scan functions ----------------------------------*/
@@ -246,22 +205,13 @@ enum iio_event_direction {
 
 
 /** @brief Create a scan context
- * @param backend A NULL-terminated string containing a comma-separated
- * list of the backend(s) to use for scanning.
+ * @param backend A NULL-terminated string containing the backend(s) to use for
+ * scanning (example: pre version 0.20 :  "local", "ip", or "usb"; post version
+ * 0.20 can handle multiple, including "local:usb:", "ip:usb:", "local:usb:ip:").
+ * If NULL, all the available backends are used.
  * @param flags Unused for now. Set to 0.
  * @return on success, a pointer to a iio_scan_context structure
- * @return On failure, NULL is returned and errno is set appropriately
- *
- * <b>NOTE:</b> Libiio version 0.20 and above can handle multiple
- * strings, for instance "local:usb:", "ip:usb:", "local:usb:ip:", and
- * require a colon as the delimiter.
- * Libiio version 0.24 and above prefer a comma instead of colon as the
- * delimiter, and handle specifying backend-specific information. For
- * instance, "local,usb=0456:*" will scan the local backend and limit
- * scans on USB to vendor ID 0x0456, and accept all product IDs. The
- * "usb=0456:b673" string would limit the scan to the device with this
- * particular VID/PID. Both IDs are expected in hexadecimal, no 0x
- * prefix needed. */
+ * @return On failure, NULL is returned and errno is set appropriately */
 __api __check_ret struct iio_scan_context * iio_create_scan_context(
 		const char *backend, unsigned int flags);
 
@@ -406,9 +356,11 @@ __api __check_ret __cnst const char * iio_get_backend(unsigned int index);
  * @return On success, A pointer to an iio_context structure
  * @return On failure, NULL is returned and errno is set appropriately
  *
- * <b>NOTE:</b> This function will create a context with the URI
- * provided in the IIOD_REMOTE environment variable. If not set, a local
- * context will be created instead. */
+ * <b>NOTE:</b> This function will create a network context if the IIOD_REMOTE
+ * environment variable is set to the hostname where the IIOD server runs. If
+ * set to an empty string, the server will be discovered using ZeroConf.
+ * If the environment variable is not set, a local context will be created
+ * instead. */
 __api __check_ret struct iio_context * iio_create_default_context(void);
 
 
@@ -462,19 +414,7 @@ __api __check_ret struct iio_context * iio_create_network_context(const char *ho
  *   a specific running IIO Daemon or no address part for automatic discovery
  *   when library is compiled with ZeroConf support. For example
  *   <i>"ip:192.168.2.1"</i>, <b>or</b> <i>"ip:localhost"</i>, <b>or</b> <i>"ip:"</i>
- *   <b>or</b> <i>"ip:plutosdr.local"</i>. To support alternative port numbers the
- *   standard <i>ip:host:port</i> format is used. A special format is required as
- *   defined in RFC2732 for IPv6 literal hostnames, (adding '[]' around the host)
- *   to use a <i>ip:[x:x:x:x:x:x:x:x]:port</i> format.
- *   Valid examples would be:
- *     - ip:                                               Any host on default port
- *     - ip::40000                                         Any host on port 40000
- *     - ip:analog.local                                   Default port
- *     - ip:brain.local:40000                              Port 40000
- *     - ip:192.168.1.119                                  Default Port
- *     - ip:192.168.1.119:40000                            Port 40000
- *     - ip:2601:190:400:da:47b3:55ab:3914:bff1            Default Port
- *     - ip:[2601:190:400:da:9a90:96ff:feb5:acaa]:40000    Port 40000
+ *   <b>or</b> <i>"ip:plutosdr.local"</i>
  * - USB backend, "usb:"\n When more than one usb device is attached, requires
  *   bus, address, and interface parts separated with a dot. For example
  *   <i>"usb:3.32.5"</i>. Where there is only one USB device attached, the shorthand
@@ -598,13 +538,13 @@ __api __check_ret __pure struct iio_device * iio_context_get_device(
 		const struct iio_context *ctx, unsigned int index);
 
 
-/** @brief Try to find a device structure by its ID, label or name
+/** @brief Try to find a device structure by its name of ID
  * @param ctx A pointer to an iio_context structure
- * @param name A NULL-terminated string corresponding to the ID, label or name
- * of the device to search for
+ * @param name A NULL-terminated string corresponding to the name or the ID of
+ * the device to search for
  * @return On success, a pointer to an iio_device structure
- * @return If the parameter does not correspond to the ID, label or name of
- * any known device, NULL is returned */
+ * @return If the name or ID does not correspond to any known device, NULL is
+ * returned */
 __api __check_ret __pure struct iio_device * iio_context_find_device(
 		const struct iio_context *ctx, const char *name);
 
@@ -647,14 +587,6 @@ __api __check_ret __pure const char * iio_device_get_id(const struct iio_device 
  *
  * <b>NOTE:</b> if the device has no name, NULL is returned. */
 __api __check_ret __pure const char * iio_device_get_name(const struct iio_device *dev);
-
-
-/** @brief Retrieve the device label (e.g. <b><i>lo_pll0_rx_adf4351</i></b>)
- * @param dev A pointer to an iio_device structure
- * @return A pointer to a static NULL-terminated string
- *
- * <b>NOTE:</b> if the device has no label, NULL is returned. */
-__api __check_ret __pure const char * iio_device_get_label(const struct iio_device *dev);
 
 
 /** @brief Enumerate the channels of the given device
@@ -1613,55 +1545,6 @@ __api void iio_buffer_set_data(struct iio_buffer *buf, void *data);
  * @param buf A pointer to an iio_buffer structure
  * @return The pointer previously associated if present, or NULL */
 __api void * iio_buffer_get_data(const struct iio_buffer *buf);
-
-/** @} *//* ------------------------------------------------------------------*/
-/* ---------------------------- HWMON support --------------------------------*/
-/** @defgroup Hwmon Compatibility with hardware monitoring (hwmon) devices
- * @{
- * @enum hwmon_chan_type
- * @brief Hwmon channel type
- *
- * Libiio support hardware-monitoring (hwmon) devices as well. This enum
- * specifies the type of data associated with the hwmon channel.
- *
- * NOTE: as of 2021 only the current hwmon API is supported. The old
- * and deprecated APIs are not supported, and won't be supported unless we
- * have a case where updating a hwmon driver is not possible.
- */
-enum hwmon_chan_type {
-	HWMON_VOLTAGE,
-	HWMON_FAN,
-	HWMON_PWM,
-	HWMON_TEMP,
-	HWMON_CURRENT,
-	HWMON_POWER,
-	HWMON_ENERGY,
-	HWMON_HUMIDITY,
-	HWMON_INTRUSION,
-	HWMON_CHAN_TYPE_UNKNOWN = IIO_CHAN_TYPE_UNKNOWN,
-};
-
-/**
- * @brief Get the type of the given hwmon channel
- * @param chn A pointer to an iio_channel structure
- * @return The type of the hwmon channel */
-static inline enum hwmon_chan_type
-hwmon_channel_get_type(const struct iio_channel *chn)
-{
-	return (enum hwmon_chan_type) iio_channel_get_type(chn);
-}
-
-/**
- * @brief Get whether or not the device is a hardware monitoring device
- * @param dev A pointer to an iio_device structure
- * @return True if the device is a hardware monitoring device,
- * false if it is a IIO device */
-static inline bool iio_device_is_hwmon(const struct iio_device *dev)
-{
-	const char *id = iio_device_get_id(dev);
-
-	return id[0] == 'h';
-}
 
 
 /** @} *//* ------------------------------------------------------------------*/

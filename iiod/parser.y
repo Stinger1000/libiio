@@ -1,11 +1,21 @@
 %{
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2014 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 #include "ops.h"
 #include "parser.h"
@@ -66,7 +76,6 @@ ssize_t yy_input(yyscan_t scanner, char *buf, size_t max_size);
 %token OPEN
 %token CLOSE
 %token PRINT
-%token ZPRINT
 %token READ
 %token READBUF
 %token WRITEBUF
@@ -109,8 +118,6 @@ Line:
 		"\t\tClose the current session\n"
 		"\tPRINT\n"
 		"\t\tDisplays a XML string corresponding to the current IIO context\n"
-		"\tZPRINT\n"
-		"\t\tGet a compressed XML string corresponding to the current IIO context\n"
 		"\tVERSION\n"
 		"\t\tGet the version of libiio in use\n"
 		"\tTIMEOUT <timeout_ms>\n"
@@ -148,31 +155,12 @@ Line:
 		const char *xml = iio_context_get_xml(pdata->ctx);
 		if (!pdata->verbose) {
 			char buf[128];
-			snprintf(buf, sizeof(buf), "%lu\n", (unsigned long) strlen(xml));
+			sprintf(buf, "%lu\n", (unsigned long) strlen(xml));
 			output(pdata, buf);
 		}
 		output(pdata, xml);
 		output(pdata, "\n");
 		YYACCEPT;
-	}
-	| ZPRINT END {
-		struct parser_pdata *pdata = yyget_extra(scanner);
-		if (pdata->xml_zstd) {
-			if (!pdata->verbose) {
-				char buf[128];
-				snprintf(buf, sizeof(buf), "%lu\n", (unsigned long)pdata->xml_zstd_len);
-				output(pdata, buf);
-			}
-			if (write_all(pdata, pdata->xml_zstd, pdata->xml_zstd_len) <= 0)
-				pdata->stop = true;
-			output(pdata, "\n");
-			YYACCEPT;
-		} else {
-			char buf[128];
-			snprintf(buf, sizeof(buf), "%d\n", -EINVAL);
-			output(pdata, buf);
-			YYABORT;
-		}
 	}
 	| TIMEOUT SPACE WORD END {
 		char *word = $3;
@@ -452,7 +440,7 @@ void yyerror(yyscan_t scanner, const char *msg)
 		output(pdata, "\n");
 	} else {
 		char buf[128];
-		snprintf(buf, sizeof(buf), "%i\n", -EINVAL);
+		sprintf(buf, "%i\n", -EINVAL);
 		output(pdata, buf);
 	}
 }

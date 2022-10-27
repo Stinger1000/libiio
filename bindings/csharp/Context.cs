@@ -1,10 +1,20 @@
-// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2015 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- */
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * */
 
 using System;
 using System.Collections.Generic;
@@ -89,7 +99,7 @@ namespace iio
         private static extern uint iio_context_get_attrs_count(IntPtr ctx);
 
         [DllImport("libiio.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int iio_context_get_attr(IntPtr ctx, uint index, out IntPtr name_ptr, out IntPtr value_ptr);
+        private static extern int iio_context_get_attr(IntPtr ctx, uint index, IntPtr name_ptr, IntPtr value_ptr);
 
         [DllImport("libiio.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr iio_context_find_device(IntPtr ctx, [In] string name);
@@ -189,16 +199,19 @@ namespace iio
             backend_version = new Version(major, minor, builder.ToString());
 
             attrs = new Dictionary<string, string>();
-            uint nbAttrs = iio_context_get_attrs_count(ctx);
 
-            for (uint i = 0; i < nbAttrs; i++)
+            for (uint i = 0; i < iio_context_get_attrs_count(ctx); i++)
             {
-                IntPtr name_ptr;
-                IntPtr value_ptr;
+                string attr_name = "";
+                GCHandle name_handle = GCHandle.Alloc(attr_name, GCHandleType.Pinned);
+                IntPtr name_ptr = GCHandle.ToIntPtr(name_handle);
+                string attr_value = "";
+                GCHandle value_handle = GCHandle.Alloc(attr_value, GCHandleType.Pinned);
+                IntPtr value_ptr = GCHandle.ToIntPtr(value_handle);
 
-                iio_context_get_attr(ctx, i, out name_ptr, out value_ptr);
-                string attr_name = Marshal.PtrToStringAnsi(name_ptr);
-                string attr_value = Marshal.PtrToStringAnsi(value_ptr);
+                iio_context_get_attr(ctx, i, name_ptr, value_ptr);
+                attr_name = Marshal.PtrToStringAnsi(Marshal.ReadIntPtr(name_ptr));
+                attr_value = Marshal.PtrToStringAnsi(Marshal.ReadIntPtr(value_ptr));
 
                 attrs[attr_name] = attr_value;
             }

@@ -37,16 +37,6 @@ add_executable(iio_readdev iio_readdev.c  ${GETOPT_C_FILE} ${LIBIIO_RC})
 add_executable(iio_reg     iio_reg.c      ${GETOPT_C_FILE} ${LIBIIO_RC})
 add_executable(iio_writedev iio_writedev.c  ${GETOPT_C_FILE} ${LIBIIO_RC})
 
-if (MSVC)
-	target_link_options(iio_tests_helper PUBLIC /DEBUG)
-	target_link_options(iio_genxml   PUBLIC /DEBUG)
-	target_link_options(iio_info     PUBLIC /DEBUG)
-	target_link_options(iio_attr     PUBLIC /DEBUG)
-	target_link_options(iio_readdev  PUBLIC /DEBUG)
-	target_link_options(iio_reg      PUBLIC /DEBUG)
-	target_link_options(iio_writedev PUBLIC /DEBUG)
-endif()
-
 target_link_libraries(iio_genxml  iio iio_tests_helper)
 target_link_libraries(iio_info    iio iio_tests_helper)
 target_link_libraries(iio_attr    iio iio_tests_helper)
@@ -56,7 +46,7 @@ target_link_libraries(iio_writedev iio iio_tests_helper)
 
 set(IIO_TESTS_TARGETS iio_genxml iio_info iio_attr iio_readdev iio_reg iio_writedev)
 
-if(PTHREAD_LIBRARIES OR ANDROID)
+if(PTHREAD_LIBRARIES)
 	project(iio_adi_xflow_check C)
 	project(iio_stresstest C)
 	add_executable(iio_adi_xflow_check iio_adi_xflow_check.c)
@@ -69,14 +59,14 @@ if(PTHREAD_LIBRARIES OR ANDROID)
 	target_link_libraries(iio_writedev ${PTHREAD_LIBRARIES})
 endif()
 
-set_target_properties(${IIO_TESTS_TARGETS} iio_tests_helper PROPERTIES
+set_target_properties(${IIO_TESTS_TARGETS} PROPERTIES
 	C_STANDARD 99
 	C_STANDARD_REQUIRED ON
 	C_EXTENSIONS OFF
 )
 
 if(NOT SKIP_INSTALL_ALL)
-	if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin" AND OSX_FRAMEWORK)
+	if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 		install(TARGETS ${IIO_TESTS_TARGETS} RUNTIME DESTINATION ${OSX_INSTALL_FRAMEWORKSDIR}/iio.framework/Tools)
 	else()
 		install(TARGETS ${IIO_TESTS_TARGETS} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

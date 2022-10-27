@@ -4,7 +4,6 @@ project(ad9361-iiostream C)
 project(ad9371-iiostream C)
 project(adrv9009-iiostream C)
 project(dummy-iiostream C)
-project(adrv9002-iiostream C)
 
 if (APPLE)
     # Add relative rpath to iio library (which is in the same framework)
@@ -38,26 +37,19 @@ add_executable(
 add_executable(
     adrv9009-iiostream adrv9009-iiostream.c ${GETOPT_C_FILE} ${LIBIIO_RC}
 )
-add_executable(
-    adrv9002-iiostream adrv9002-iiostream.c ${GETOPT_C_FILE} ${LIBIIO_RC}
-)
 add_executable(dummy-iiostream dummy-iiostream.c ${GETOPT_C_FILE} ${LIBIIO_RC})
 
 target_link_libraries(ad9361-iiostream iio)
 target_link_libraries(ad9371-iiostream iio)
 target_link_libraries(adrv9009-iiostream iio)
 target_link_libraries(dummy-iiostream iio)
-target_link_libraries(adrv9002-iiostream iio)
 
 set(IIO_EXAMPLES_TARGETS ad9361-iiostream ad9371-iiostream adrv9009-iiostream
-                         dummy-iiostream adrv9002-iiostream
+                         dummy-iiostream
 )
 
-find_library(PTHREAD_LIBRARIES pthread)
 find_library(CURSES_LIBRARY curses)
 find_library(CDK_LIBRARY cdk)
-
-include(CheckSymbolExists)
 
 if (PTHREAD_LIBRARIES
     AND CURSES_LIBRARY
@@ -69,10 +61,7 @@ if (PTHREAD_LIBRARIES
     set(TEMP1 ${CMAKE_REQUIRED_INCLUDES})
     list(APPEND CMAKE_REQUIRED_LIBRARIES ${CURSES_LIBRARY} ${CDK_LIBRARY})
     list(APPEND CMAKE_REQUIRED_INCLUDES ${LIBCKD_INCLUDE_DIR})
-    set(TMP_FLAGS "${CMAKE_C_FLAGS}")
-    set(CMAKE_C_FLAGS "")
     check_symbol_exists(CDK_CSTRING2 "cdk.h" HAS_CDK_CSTRING2)
-    set(CMAKE_C_FLAGS "${TMP_FLAGS}")
     set(CMAKE_REQUIRED_LIBRARIES ${TEMP})
     set(CMAKE_REQUIRED_INCLUDES ${TEMP1})
 endif()
