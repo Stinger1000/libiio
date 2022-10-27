@@ -36,6 +36,8 @@ static bool device_is_high_speed(const struct iio_device *dev)
 struct iio_buffer * iio_device_create_buffer(const struct iio_device *dev,
 		size_t samples_count, bool cyclic)
 {
+
+
 	ssize_t ret = -EINVAL;
 	struct iio_buffer *buf;
 	ssize_t sample_size = iio_device_get_sample_size(dev);
@@ -156,7 +158,7 @@ ssize_t iio_buffer_refill(struct iio_buffer *buffer)
 
 ssize_t iio_buffer_push(struct iio_buffer *buffer)
 {
-	return 0;
+	return -EINVAL;//test
 	
 	const struct iio_device *dev = buffer->dev;
 	ssize_t ret;
