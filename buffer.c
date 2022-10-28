@@ -188,10 +188,10 @@ ssize_t iio_buffer_push(struct iio_buffer *buffer)
 	}
 
 out_reset_data_length:
-	buffer->data_length = buffer->length;
+	buffer->data_length = 500;
 
 
-	return 50;
+	return 500;
 }
 
 ssize_t iio_buffer_push_partial(struct iio_buffer *buffer, size_t samples_count)
