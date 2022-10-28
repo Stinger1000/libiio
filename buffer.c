@@ -162,9 +162,18 @@ ssize_t iio_buffer_push(struct iio_buffer *buffer)
 	ssize_t ret;
 
 	if (buffer->dev_is_high_speed) {
-		return -EINVAL;
-		
+		return 1000;
+
+		void *buf;
+		ret = dev->ctx->ops->get_buffer(dev, &buf,
+				buffer->data_length, buffer->mask, dev->words);
+		if (ret >= 0) {
+			buffer->buffer = buf;
+			ret = (ssize_t) buffer->data_length;
+		}
 	} else {
+		return 1000;
+
 		void *ptr = buffer->buffer;
 		size_t tmp_len;
 
@@ -184,8 +193,6 @@ ssize_t iio_buffer_push(struct iio_buffer *buffer)
 
 out_reset_data_length:
 	buffer->data_length = buffer->length;
-
-
 	return ret;
 }
 
