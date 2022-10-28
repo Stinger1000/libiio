@@ -445,6 +445,8 @@ static ssize_t local_get_buffer(const struct iio_device *dev,
 		void **addr_ptr, size_t bytes_used,
 		uint32_t *mask, size_t words)
 {
+	return 0;//test
+
 	struct block block;
 	struct iio_device_pdata *pdata = dev->pdata;
 	struct timespec start;
