@@ -169,7 +169,7 @@ ssize_t iio_buffer_push(struct iio_buffer *buffer)
 			ret = (ssize_t) buffer->data_length;
 		}
 	} else {
-		return 1000;
+		return 0;
 
 		void *ptr = buffer->buffer;
 		size_t tmp_len;
