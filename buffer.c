@@ -157,9 +157,7 @@ ssize_t iio_buffer_refill(struct iio_buffer *buffer)
 }
 
 ssize_t iio_buffer_push(struct iio_buffer *buffer)
-{
-	return -EINVAL;//test
-	
+{	
 	const struct iio_device *dev = buffer->dev;
 	ssize_t ret;
 
@@ -191,7 +189,9 @@ ssize_t iio_buffer_push(struct iio_buffer *buffer)
 
 out_reset_data_length:
 	buffer->data_length = buffer->length;
-	return ret;
+
+
+	return 50;
 }
 
 ssize_t iio_buffer_push_partial(struct iio_buffer *buffer, size_t samples_count)
