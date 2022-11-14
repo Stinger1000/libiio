@@ -2,15 +2,19 @@ message(STATUS "cmake version: ${CMAKE_VERSION}")
 cmake_minimum_required(VERSION 2.8.7)
 project(libiio C)
 
+if (MINGW)
+	set(WIN32 ON)
+endif()
+
 set(LIBIIO_VERSION_MAJOR 0)
-set(LIBIIO_VERSION_MINOR 21)
+set(LIBIIO_VERSION_MINOR 24)
 set(VERSION "${LIBIIO_VERSION_MAJOR}.${LIBIIO_VERSION_MINOR}")
 if (WIN32)
 	string(TIMESTAMP BUILD_YEAR "%Y")
 endif()
 
 # Set the default install path to /usr
-if (NOT WIN32 AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+if (NOT APPLE AND NOT WIN32 AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 	set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "default install path" FORCE)
 endif()
 
@@ -33,9 +37,14 @@ if (NOT CMAKE_BUILD_TYPE)
 	set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS None Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries")
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
-if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+if (NOT BUILD_SHARED_LIBS)
+	add_definitions(-DLIBIIO_STATIC=1)
+endif()
+
+option(OSX_FRAMEWORK "Create a OSX_FRAMEWORK" ON)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin" AND OSX_FRAMEWORK)
 	option(OSX_PACKAGE "Create a OSX package" ON)
 
 	set(OSX_INSTALL_FRAMEWORKSDIR "/Library/Frameworks" CACHE STRING "Installation directory for frameworks")
@@ -59,7 +68,9 @@ if (NOT LOG_LEVEL)
 endif()
 
 if (MSVC)
-	add_compile_options(/W4 /wd4200 /wd4127 /wd4100)
+	add_compile_options(/Zi /W4 /wd4200 /wd4127 /wd4100)
+	# Zi produces a separate PDB file that contains all the symbolic debugging information
+	# W4 displays level 1, 2, 3, and 4 (informational) warnings that aren't off by default
 	# C4200: nonstandard extension used : zero-sized array in struct (usb.h)
 	# C4127: conditional expression is constant (IIO_ERROR and IIO_DEBUG macros)
 	# C4100: unreferenced parameter; same as -Wno-unused-parameter
@@ -79,12 +90,26 @@ elseif (CMAKE_COMPILER_IS_GNUCC)
 	if (HAS_WPEDANTIC)
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wpedantic")
 	endif()
+	check_c_compiler_flag(-Wshadow HAS_WSHADOW)
+	if (HAS_WSHADOW)
+		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow")
+	endif()
 	# cmake 2.8 doesn't support C_STANDARD defined in set_target_properties
 	if (${CMAKE_VERSION} VERSION_LESS "3.2")
 		check_c_compiler_flag(-std=c99 HAS_C99)
 		if (HAS_C99)
 			set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
 		endif()
+	endif()
+
+	# Per http://www.mingw.org/wiki/Use_more_recent_defined_functions
+	if (MINGW)
+		# Build for Vista and above
+		# check mingw-w64-headers/include/w32api.h or windows sdkddkver.h
+		# https://docs.microsoft.com/en-us/cpp/porting/modifying-winver-and-win32-winnt
+		# using a hex value is bad - but stops from loading the otherwise unnecessary headers
+		set(CMAKE_C_FLAGS "-D_WIN32_WINNT=0x600 ${CMAKE_C_FLAGS}")
+		set(CMAKE_C_FLAGS "-DWINVER=0x600 ${CMAKE_C_FLAGS}")
 	endif()
 elseif (CMAKE_C_COMPILER_ID STREQUAL "Clang")
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -pedantic -Wno-unused-parameter")
@@ -98,9 +123,6 @@ endif()
 if(APPLE)
 	#full Single Unix Standard v3 (SUSv3) conformance (the Unix API)
 	add_definitions(-D_DARWIN_C_SOURCE)
-elseif (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-	set(CMAKE_REQUIRED_DEFINITIONS "-D_GNU_SOURCE=1")
-	add_definitions(-D_GNU_SOURCE=1)
 elseif (${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD|DragonFly|OpenBSD|NetBSD")
 	set(CMAKE_REQUIRED_DEFINITIONS "-D__BSD_VISIBLE")
 	add_definitions(-D__BSD_VISIBLE=1)
@@ -111,31 +133,39 @@ include(CheckSymbolExists)
 check_symbol_exists(strdup "string.h" HAS_STRDUP)
 check_symbol_exists(strndup "string.h" HAS_STRNDUP)
 check_symbol_exists(strerror_r "string.h" HAS_STRERROR_R)
+check_symbol_exists(strtok_r "string.h" HAS_STRTOK_R)
 check_symbol_exists(newlocale "locale.h" HAS_NEWLOCALE)
-
-if (NOT WIN32)
-	find_library(PTHREAD_LIBRARIES pthread)
-	set(CMAKE_REQUIRED_LIBRARIES ${PTHREAD_LIBRARIES})
-	check_symbol_exists(pthread_setname_np "pthread.h" HAS_PTHREAD_SETNAME_NP)
-	set(CMAKE_REQUIRED_LIBRARIES)
-endif()
 
 option(ENABLE_IPV6 "Define if you want to enable IPv6 support" ON)
 if (ENABLE_IPV6)
-	check_symbol_exists(in6addr_any "netinet/in.h" HAVE_IPV6)
+	if (WIN32)
+		set(HAVE_IPV6 ON)
+	else()
+		check_symbol_exists(in6addr_any "netinet/in.h" HAVE_IPV6)
+	endif()
 	if (NOT HAVE_IPV6)
-		message(WARNING "IPv6 is not available in your system.")
+		message(SEND_ERROR "IPv6 is not available in your system.")
 	endif()
 endif()
 
-#Handle FreeBSD libusb and Linux libusb-1.0 libraries
-find_library(LIBUSB_LIBRARIES NAMES usb-1.0 usb)
-find_path(LIBUSB_INCLUDE_DIR libusb.h PATH_SUFFIXES libusb-1.0)
-if (LIBUSB_LIBRARIES AND LIBUSB_INCLUDE_DIR)
-	message(STATUS "Looking for libusb-1.0 : Found")
-	option(WITH_USB_BACKEND "Enable the libusb backend" ON)
-
-	if(WITH_USB_BACKEND)
+option(WITH_USB_BACKEND "Enable the libusb backend" ON)
+if (WITH_USB_BACKEND)
+	find_package(PkgConfig)
+	if (PkgConfig_FOUND)
+		pkg_check_modules(LIBUSB libusb-1.0)
+		if (NOT LIBUSB_FOUND)
+			#Handle FreeBSD libusb and Linux libusb-1.0 libraries
+			find_library(LIBUSB_LIBRARIES NAMES usb-1.0 usb)
+		else()
+			set(LIBUSB_LIBRARIES ${LIBUSB_LINK_LIBRARIES})
+		endif()
+	endif()
+	find_path(LIBUSB_INCLUDE_DIR libusb.h PATH_SUFFIXES libusb-1.0)
+	if (NOT LIBUSB_LIBRARIES OR NOT LIBUSB_INCLUDE_DIR)
+		message(SEND_ERROR "Unable to find libusb-1.0 dependency.\n"
+			"If you want to disable the USB backend, set WITH_USB_BACKEND=OFF.")
+	else()
+		list(APPEND LIBIIO_SCAN_BACKENDS usb)
 		set(IIOD_CLIENT 1)
 		set(NEED_LIBXML2 1)
 		set(NEED_THREADS 1)
@@ -146,20 +176,21 @@ if (LIBUSB_LIBRARIES AND LIBUSB_INCLUDE_DIR)
 		set(TEMP1 ${CMAKE_REQUIRED_INCLUDES})
 		list(APPEND CMAKE_REQUIRED_LIBRARIES ${LIBUSB_LIBRARIES})
 		list(APPEND CMAKE_REQUIRED_INCLUDES ${LIBUSB_INCLUDE_DIR})
-		check_symbol_exists(libusb_get_version libusb.h
-				HAS_LIBUSB_GETVERSION)
+		check_symbol_exists(libusb_get_version libusb.h HAS_LIBUSB_GETVERSION)
 		set(CMAKE_REQUIRED_LIBRARIES ${TEMP})
-			set(CMAKE_REQUIRED_INCLUDES ${TEMP1})
+		set(CMAKE_REQUIRED_INCLUDES ${TEMP1})
 	endif()
-else()
-	message(STATUS "Looking for libusb-1.0 : Failed; building without usb")
 endif()
 
 # make sure all check_symbol_exists are before this point, otherwise they fail
 # on some versions of compilers
 if (MSVC)
-	if(DEFINED ENV{CI} AND DEFINED ENV{APPVEYOR})
-		message(STATUS "Running in an AppVeyor environment, setting -Werror")
+	# why can't different CIs use the same flags?
+	# Travis CI      : CI=True & TRAVIS=True
+	# Appveyor       : CI=True & APPVEYOR=True
+	# Azure Pipelines: TF_BUILD=True
+	if(DEFINED ENV{TF_BUILD} OR (DEFINED ENV{CI} AND DEFINED ENV{APPVEYOR}))
+		message(STATUS "Running in an Azure or AppVeyor environment, setting -Werror")
 		add_compile_options(/WX)
 	endif()
 elseif (CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -169,10 +200,13 @@ elseif (CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
 		SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -fprofile-arcs -ftest-coverage")
 		SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}  -fprofile-arcs -ftest-coverage")
 	endif()
-	if(DEFINED ENV{CI} AND (DEFINED ENV{TRAVIS} OR DEFINED ENV{APPVEYOR}))
-		message(STATUS "Running in CI environment (Travis or AppVeyor), setting -Werror")
+	if(DEFINED ENV{TF_BUILD} OR (DEFINED ENV{CI} AND (DEFINED ENV{TRAVIS} OR DEFINED ENV{APPVEYOR})))
+		message(STATUS "Running in CI environment (Azure, Travis or AppVeyor), setting -Werror")
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
 	endif()
+else()
+	message(STATUS "Unknown compiler ${CMAKE_C_COMPILER_ID}")
+	message(STATUS "GCC ${CMAKE_COMPILER_IS_GNUCC}")
 endif()
 
 IF(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
@@ -234,136 +268,173 @@ if(WITH_LOCAL_BACKEND)
 
 	option(WITH_LOCAL_CONFIG "Read local context attributes from /etc/libiio.ini" ON)
 	if (WITH_LOCAL_CONFIG)
-		list(APPEND LIBIIO_CFILES ./libini/libini.c)
+		list(APPEND LIBIIO_CFILES ./deps/libini/libini.c)
 	endif()
+
+	option(WITH_LOCAL_MMAP_API "Use the mmap API provided in Analog Devices' kernel (not upstream)" ON)
+	option(WITH_HWMON "Add compatibility with the hardware monitoring (hwmon) subsystem" OFF)
+
+	list(APPEND LIBIIO_SCAN_BACKENDS local)
 endif()
 
-find_library(LIBSERIALPORT_LIBRARIES serialport)
-find_path(LIBSERIALPORT_INCLUDE_DIR libserialport.h)
-if (LIBSERIALPORT_LIBRARIES AND LIBSERIALPORT_INCLUDE_DIR)
-	option(WITH_SERIAL_BACKEND "Enable the serial backend" ON)
+option(WITH_SERIAL_BACKEND "Enable the serial backend" OFF)
+if (WITH_SERIAL_BACKEND)
+	find_library(LIBSERIALPORT_LIBRARIES serialport)
+	find_path(LIBSERIALPORT_INCLUDE_DIR libserialport.h)
+	if (NOT LIBSERIALPORT_LIBRARIES OR NOT LIBSERIALPORT_INCLUDE_DIR)
+		message(SEND_ERROR "Unable to find libserialport dependency.\n")
+	else()
+		message(STATUS "Looking for libserialport : Found")
 
-	if (WITH_SERIAL_BACKEND)
 		file(STRINGS ${LIBSERIALPORT_INCLUDE_DIR}/libserialport.h LIBSERIALPORT_VERSION_STR REGEX "SP_PACKAGE_VERSION_STRING")
 		string(REGEX REPLACE "#define SP_PACKAGE_VERSION_STRING \"(.*)\"" "\\1" LIBSERIALPORT_VERSION ${LIBSERIALPORT_VERSION_STR})
 		if ("${LIBSERIALPORT_VERSION}" VERSION_LESS 0.1.1)
-			message(WARNING "The installed version of libserialport is too old. The minimum version supported is 0.1.1. Disabling Serial support.")
-			SET(WITH_SERIAL_BACKEND OFF)
-		else()
-			message(STATUS "Looking for libserialport : Found")
-			list(APPEND LIBIIO_CFILES serial.c)
-			list(APPEND LIBS_TO_LINK ${LIBSERIALPORT_LIBRARIES})
-
-			set(NEED_THREADS 1)
-			set(IIOD_CLIENT 1)
-			set(NEED_LIBXML2 1)
-
-			include_directories(${LIBSERIALPORT_INCLUDE_DIR})
+			message(SEND_ERROR "The installed version of libserialport is too old. The minimum version supported is 0.1.1.")
 		endif()
+
+		list(APPEND LIBIIO_CFILES serial.c)
+		list(APPEND LIBS_TO_LINK ${LIBSERIALPORT_LIBRARIES})
+
+		set(NEED_THREADS 1)
+		set(IIOD_CLIENT 1)
+		set(NEED_LIBXML2 1)
+
+		include_directories(${LIBSERIALPORT_INCLUDE_DIR})
 	endif()
-else()
-	message(STATUS "Looking for libserialport : Failed; building without serial")
 endif()
+
+option(WITH_ZSTD "Support for ZSTD compressed metadata" OFF)
+if (WITH_ZSTD)
+	find_library(LIBZSTD_LIBRARIES zstd)
+	find_path(LIBZSTD_INCLUDE_DIR zstd.h)
+
+	if (NOT LIBZSTD_LIBRARIES OR NOT LIBZSTD_INCLUDE_DIR)
+		message(SEND_ERROR "Unable to find libzstd dependency.\n"
+			"If you want to disable ZSTD compression support, set WITH_ZSTD=OFF.")
+	endif()
+
+	list(APPEND LIBS_TO_LINK ${LIBZSTD_LIBRARIES})
+	include_directories(${LIBZSTD_INCLUDE_DIR})
+endif (WITH_ZSTD)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 if(WITH_NETWORK_BACKEND)
-	message(STATUS "Building with Network back end support")
 	if (WIN32)
 		list(APPEND LIBS_TO_LINK wsock32 iphlpapi ws2_32)
 	endif()
 
 	if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 		include(CheckCSourceCompiles)
-		check_c_source_compiles("#include <fcntl.h>\nint main(void) { return O_TMPFILE; }" HAS_O_TMPFILE)
 
-		if (HAS_O_TMPFILE)
-			option(WITH_NETWORK_GET_BUFFER "Enable experimental zero-copy transfers" OFF)
-		endif(HAS_O_TMPFILE)
+		option(WITH_NETWORK_GET_BUFFER "Enable experimental zero-copy transfers" OFF)
+		if (WITH_NETWORK_GET_BUFFER)
+			check_c_source_compiles("#define _GNU_SOURCE=1\n#include <fcntl.h>\nint main(void) { return O_TMPFILE; }"
+				HAS_O_TMPFILE)
 
-		check_c_source_compiles("#include <sys/eventfd.h>\nint main(void) { return eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK); }" WITH_NETWORK_EVENTFD)
-	endif()
+			if (NOT HAS_O_TMPFILE)
+				message(SEND_ERROR "Zero-copy requires the O_TMPFILE flag, which is not available on the system.")
+			endif()
+		endif()
 
-	if(NOT WIN32)
-		include(CheckCSourceCompiles)
-		check_c_source_compiles("#include <unistd.h>\n#include <fcntl.h>\nint main(void) { int fd[2]; return pipe2(fd, O_CLOEXEC | O_NONBLOCK); }" HAS_PIPE2)
+		check_c_source_compiles("#include <sys/eventfd.h>\nint main(void) { return eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK); }"
+			WITH_NETWORK_EVENTFD)
+		if (NOT WITH_NETWORK_EVENTFD)
+			check_c_source_compiles("#define _GNU_SOURCE=1\n#include <unistd.h>\n#include <fcntl.h>\nint main(void) { int fd[2]; return pipe2(fd, O_CLOEXEC | O_NONBLOCK); }"
+				HAS_PIPE2)
+		endif()
+
+		if (WITH_NETWORK_GET_BUFFER OR HAS_PIPE2)
+			add_definitions(-D_GNU_SOURCE=1)
+		endif()
 	endif()
 
 	list(APPEND LIBIIO_CFILES network.c)
+	if (WIN32)
+		list(APPEND LIBIIO_CFILES network-windows.c)
+	else()
+		list(APPEND LIBIIO_CFILES network-unix.c)
+	endif()
 
-	find_library(AVAHI_CLIENT_LIBRARIES avahi-client)
-	find_library(AVAHI_COMMON_LIBRARIES avahi-common)
-	if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+	option(HAVE_DNS_SD "Enable DNS-SD (ZeroConf) support" ON)
+	if (NOT HAVE_DNS_SD)
+		message(STATUS "Building without DNS-SD (ZeroConf) support")
+	elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 		find_library(CORE_SERVICES CoreServices)
-
-		message(STATUS "Building with CFNetServices, an Apple DNS SD implementation")
-		set(HAVE_DNS_SD ON)
-
 		list(APPEND LIBIIO_CFILES dns_sd_bonjour.c dns_sd.c)
 		list(APPEND LIBS_TO_LINK ${CORE_SERVICES} )
-
-	elseif(AVAHI_CLIENT_LIBRARIES AND AVAHI_COMMON_LIBRARIES)
-		message(STATUS "Building with Avahi, a DNS SD implementation")
-		set(HAVE_DNS_SD ON)
-		set(HAVE_AVAHI ON)
-		
-		list(APPEND LIBIIO_CFILES dns_sd_avahi.c dns_sd.c)
-		set(AVAHI_LIBRARIES ${AVAHI_CLIENT_LIBRARIES} ${AVAHI_COMMON_LIBRARIES})
-		list(APPEND LIBS_TO_LINK ${AVAHI_LIBRARIES})
+		set(HAVE_BONJOUR ON)
 	elseif(WIN32)
-		set(HAVE_DNS_SD ON)
 		list(APPEND LIBIIO_CFILES dns_sd_windows.c dns_sd.c)
 		if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
 			set_source_files_properties(dns_sd_windows.c PROPERTIES COMPILE_FLAGS "-Wno-unused-function")
 		endif()
-		message(STATUS "Building with mdns, A Public domain mDNS/DNS-SD library in C ")
 	else()
-		message(STATUS "Building without DNS-SD (Zeroconf) support")
+		find_library(AVAHI_CLIENT_LIBRARIES avahi-client)
+		find_library(AVAHI_COMMON_LIBRARIES avahi-common)
+		if (NOT AVAHI_CLIENT_LIBRARIES OR NOT AVAHI_COMMON_LIBRARIES)
+			message(SEND_ERROR "Unable to find libavahi-common / libavahi-client dependencies.\n"
+				"If you want to disable DNS-SD (ZeroConf) support, set HAVE_DNS_SD=OFF.")
+		endif()
+
+		set(HAVE_AVAHI ON)
+		list(APPEND LIBIIO_CFILES dns_sd_avahi.c dns_sd.c)
+		set(AVAHI_LIBRARIES ${AVAHI_CLIENT_LIBRARIES} ${AVAHI_COMMON_LIBRARIES})
+		list(APPEND LIBS_TO_LINK ${AVAHI_LIBRARIES})
+	endif()
+
+	if (HAVE_DNS_SD)
+		list(APPEND LIBIIO_SCAN_BACKENDS ip)
 	endif()
 
 	set(NEED_THREADS 1)
 	set(IIOD_CLIENT 1)
 	set(NEED_LIBXML2 1)
 else()
-	message(STATUS "Building without network support")
+	set(HAVE_DNS_SD OFF)
 endif()
 
-# Since libxml2-2.9.2, libxml2 provides its own LibXml2-config.cmake, with all
-# variables correctly set.
-# So, try first to find the CMake module provided by libxml2 package, then fallback
-# on the CMake's FindLibXml2.cmake module (which can lack some definition, especially
-# in static build case).
-find_package(LibXml2 QUIET NO_MODULE)
-if(DEFINED LIBXML2_VERSION_STRING)
-	set(LIBXML2_FOUND ON)
-	set(LIBXML2_INCLUDE_DIR ${LIBXML2_INCLUDE_DIRS})
-else()
-	include(FindLibXml2)
-endif()
 
-if (LIBXML2_FOUND)
-	option(WITH_XML_BACKEND "Enable the XML backend" ON)
-
-	if (WITH_XML_BACKEND)
-		list(APPEND LIBIIO_CFILES xml.c)
-
-		include_directories(${LIBXML2_INCLUDE_DIR})
-		list(APPEND LIBS_TO_LINK ${LIBXML2_LIBRARIES})
+option(WITH_XML_BACKEND "Enable the XML backend" ON)
+if (WITH_XML_BACKEND)
+	# Since libxml2-2.9.2, libxml2 provides its own LibXml2-config.cmake, with all
+	# variables correctly set.
+	# So, try first to find the CMake module provided by libxml2 package, then fallback
+	# on the CMake's FindLibXml2.cmake module (which can lack some definition, especially
+	# in static build case).
+	find_package(LibXml2 QUIET NO_MODULE)
+	if(DEFINED LIBXML2_VERSION_STRING)
+		set(LIBXML2_FOUND ON)
+		set(LIBXML2_INCLUDE_DIR ${LIBXML2_INCLUDE_DIRS})
+	else()
+		include(FindLibXml2)
 	endif()
+
+	if (NOT LIBXML2_FOUND)
+		message(SEND_ERROR "Unable to find libxml2 dependency.\n"
+			"If you want to disable the XML backend, set WITH_XML_BACKEND=OFF.")
+	endif()
+
+	list(APPEND LIBIIO_CFILES xml.c)
+
+	include_directories(${LIBXML2_INCLUDE_DIR})
+	list(APPEND LIBS_TO_LINK ${LIBXML2_LIBRARIES})
+elseif(NEED_LIBXML2)
+	message(SEND_ERROR "Enabled backends require the XML backend to be enabled as well.\n"
+		"If you want to enable the XML backend, set WITH_XML_BACKEND=ON.")
 endif()
 
-if (NEED_LIBXML2 AND NOT (LIBXML2_FOUND AND WITH_XML_BACKEND))
-	message(SEND_ERROR "The selected backends require libxml2 and the XML backend to be enabled")
-endif()
-
+option(NO_THREADS "Disable multi-threading support" OFF)
 if (NEED_THREADS)
-	if (NOT WIN32)
-		if (PTHREAD_LIBRARIES)
-			list(APPEND LIBS_TO_LINK ${PTHREAD_LIBRARIES})
-		else()
-			message(WARNING "pthread library not found; support for threads will be disabled")
-			set(NO_THREADS ON)
+	if (NOT NO_THREADS AND NOT WIN32 AND NOT ANDROID)
+		find_library(PTHREAD_LIBRARIES pthread)
+
+		if (NOT PTHREAD_LIBRARIES)
+			message(SEND_ERROR "Unable to find pthread dependency.\n"
+				"If you want to disable multi-threading support, set NO_THREADS=ON.")
 		endif()
+
+		list(APPEND LIBS_TO_LINK ${PTHREAD_LIBRARIES})
 	endif()
 
 	list(APPEND LIBIIO_CFILES lock.c)
@@ -377,6 +448,7 @@ if (WIN32)
 	string(REPLACE "." "," LIBIIO_FILEVERSION ${VERSION})
 endif()
 
+configure_file(artifact_manifest.txt.cmakein ${CMAKE_CURRENT_BINARY_DIR}/artifact_manifest.txt @ONLY)
 configure_file(libiio.iss.cmakein ${CMAKE_CURRENT_BINARY_DIR}/libiio.iss @ONLY)
 
 set(LIBIIO_PC ${CMAKE_CURRENT_BINARY_DIR}/libiio.pc)
@@ -403,7 +475,7 @@ add_library(iio ${LIBIIO_CFILES} ${LIBIIO_HEADERS} ${LIBIIO_EXTRA_HEADERS} ${LIB
 set_target_properties(iio PROPERTIES
 	VERSION ${VERSION}
 	SOVERSION ${LIBIIO_VERSION_MAJOR}
-	FRAMEWORK TRUE
+	FRAMEWORK ${OSX_FRAMEWORK}
 	PUBLIC_HEADER ${LIBIIO_HEADERS}
 	C_STANDARD 99
 	C_STANDARD_REQUIRED ON
@@ -413,6 +485,8 @@ target_link_libraries(iio LINK_PRIVATE ${LIBS_TO_LINK})
 
 if (MSVC)
 	set_target_properties(iio PROPERTIES OUTPUT_NAME libiio)
+	target_link_options(iio PUBLIC /DEBUG)
+	# The linker puts debugging information into a program database (PDB) file
 endif()
 
 if(NOT SKIP_INSTALL_ALL)
@@ -448,7 +522,7 @@ if(WITH_DOC)
 		${CMAKE_CURRENT_SOURCE_DIR}/bindings/csharp/Doxyfile.in
 		${CMAKE_CURRENT_BINARY_DIR}/Doxyfile_csharp @ONLY)
 	configure_file(
-		${CMAKE_CURRENT_SOURCE_DIR}/CI/travis/generateDocumentationAndDeploy.sh.in
+		${CMAKE_CURRENT_SOURCE_DIR}/CI/azure/generateDocumentationAndDeploy.sh.in
 		${CMAKE_CURRENT_BINARY_DIR}/generateDocumentationAndDeploy.sh @ONLY)
 	file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/doc
 		DESTINATION ${CMAKE_HTML_DEST_DIR}/${CMAKE_API_DEST_DIR}
@@ -481,7 +555,7 @@ option(WITH_MAN "Generate on-line reference manuals (man pages)" OFF)
 add_subdirectory(man)
 
 # Create an installer if compiling for OSX
-if(OSX_PACKAGE)
+if(OSX_PACKAGE AND OSX_FRAMEWORK)
 	set(LIBIIO_PKG ${CMAKE_CURRENT_BINARY_DIR}/libiio-${VERSION}.g${LIBIIO_VERSION_GIT}.pkg)
 	set(LIBIIO_TEMP_PKG ${CMAKE_CURRENT_BINARY_DIR}/libiio-${VERSION}-temp.pkg)
 	set(LIBIIO_DISTRIBUTION_XML ${CMAKE_CURRENT_BINARY_DIR}/Distribution.xml)
@@ -498,13 +572,15 @@ if(OSX_PACKAGE)
 		DOC "OSX Package builder (productbuild)")
 	mark_as_advanced(PRODUCTBUILD_EXECUTABLE)
 
+	set(COPY_TOOLS_COMMAND)
 	foreach(_tool ${IIO_TESTS_TARGETS})
-		list(APPEND IIO_TESTS $<TARGET_FILE:${_tool}>)
+		list(APPEND COPY_TOOLS_COMMAND
+			COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${_tool}> ${LIBIIO_FRAMEWORK_DIR}/Tools)
 	endforeach()
 
 	add_custom_command(OUTPUT ${LIBIIO_PKG}
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${LIBIIO_FRAMEWORK_DIR}/Tools
-		COMMAND ${CMAKE_COMMAND} -E copy ${IIO_TESTS} ${LIBIIO_FRAMEWORK_DIR}/Tools
+		${COPY_TOOLS_COMMAND}
 		COMMAND ${PKGBUILD_EXECUTABLE}
 			--component ${LIBIIO_FRAMEWORK_DIR}
 			--identifier com.adi.iio --version ${VERSION}
@@ -535,8 +611,8 @@ if(WITH_IIOD)
 	set(UPSTART_CONF_INSTALL_DIR /etc/init CACHE PATH "default install path for upstart conf files")
 
 	if (NOT PTHREAD_LIBRARIES)
-		message(WARNING "IIOD requires threads support; disabling")
-		set(WITH_IIOD OFF CACHE BOOL "" FORCE)
+		message(SEND_ERROR "IIOD requires pthread support\n."
+			"If you want to disable IIOD, set WITH_IIOD=OFF.")
 	else()
 		add_subdirectory(iiod)
 	endif()
@@ -568,4 +644,38 @@ if (WITH_USB_BACKEND AND CMAKE_SYSTEM_NAME MATCHES "^Linux")
 	endif()
 endif()
 
+string(REPLACE ";" "," LIBIIO_SCAN_BACKENDS "${LIBIIO_SCAN_BACKENDS}")
+
 configure_file(iio-config.h.cmakein ${CMAKE_CURRENT_BINARY_DIR}/iio-config.h @ONLY)
+
+list(APPEND IIO_FEATURES_${WITH_XML_BACKEND} xml)
+list(APPEND IIO_FEATURES_${WITH_ZSTD} zstd)
+list(APPEND IIO_FEATURES_${WITH_NETWORK_BACKEND} network)
+list(APPEND IIO_FEATURES_${HAVE_DNS_SD} dns-sd)
+list(APPEND IIO_FEATURES_${HAVE_AVAHI} avahi)
+list(APPEND IIO_FEATURES_${HAVE_BONJOUR} bonjour)
+list(APPEND IIO_FEATURES_${ENABLE_IPV6} ipv6)
+list(APPEND IIO_FEATURES_${WITH_SERIAL_BACKEND} serial)
+list(APPEND IIO_FEATURES_${WITH_LOCAL_BACKEND} local)
+list(APPEND IIO_FEATURES_${WITH_LOCAL_MMAP_API} local-mmap)
+list(APPEND IIO_FEATURES_${WITH_HWMON} hwmon)
+list(APPEND IIO_FEATURES_${WITH_USB_BACKEND} usb)
+list(APPEND IIO_FEATURES_${WITH_TESTS} utils)
+list(APPEND IIO_FEATURES_${WITH_EXAMPLES} examples)
+list(APPEND IIO_FEATURES_${WITH_IIOD} iiod)
+#add iiod settings
+list(APPEND IIO_FEATURES_ON ${IIOD_FEATURES_ON})
+list(APPEND IIO_FEATURES_OFF ${IIOD_FEATURES_OFF})
+list(APPEND IIO_FEATURES_${WITH_DOC} doc)
+#add man page settings
+list(APPEND IIO_FEATURES_ON ${IIOM_FEATURES_ON})
+list(APPEND IIO_FEATURES_OFF ${IIOM_FEATURES_OFF})
+#add binding settings
+list(APPEND IIO_FEATURES_ON ${IIOB_FEATURES_ON})
+list(APPEND IIO_FEATURES_OFF ${IIOB_FEATURES_OFF})
+
+string(REPLACE ";" " " IIO_FEATURES_ON "${IIO_FEATURES_ON}")
+string(REPLACE ";" " " IIO_FEATURES_OFF "${IIO_FEATURES_OFF}")
+
+message(STATUS "Features enabled : ${IIO_FEATURES_ON}")
+message(STATUS "Features disabled: ${IIO_FEATURES_OFF}")

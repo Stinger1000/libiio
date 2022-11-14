@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * iio_reg - Part of the industrial I/O (IIO) utilities
  *
  * Copyright (C) 2015 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  * */
 
 #include <errno.h>
@@ -82,6 +69,7 @@ int main(int argc, char **argv)
 	int c;
 	char * name;
 	struct option *opts;
+	bool do_scan = false;
 
 	argw = dup_argv(MY_NAME, argc, argv);
 
@@ -99,8 +87,11 @@ int main(int argc, char **argv)
 		case 'n':
 		case 'x':
 		case 'u':
+		case 'T':
 			break;
 		case 'S':
+			do_scan = true;
+			/* FALLTHRU */
 		case 'a':
 			if (!optarg && argc > optind && argv[optind] != NULL
 					&& argv[optind][0] != '-')
@@ -112,6 +103,9 @@ int main(int argc, char **argv)
 		}
 	}
 	free(opts);
+
+	if (do_scan)
+		return EXIT_SUCCESS;
 
 	if ((argc - optind) < 2 || (argc - optind) > 3) {
 		usage(MY_NAME, options, options_descriptions);

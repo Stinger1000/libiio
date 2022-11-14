@@ -1,22 +1,12 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2016 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
  */
 
 #include "../debug.h"
-#include "../iio-private.h"
 #include "ops.h"
 #include "thread-pool.h"
 
@@ -54,6 +44,9 @@ struct usbd_pdata {
 	bool debug, use_aio;
 	struct thread_pool **pool;
 	unsigned int nb_pipes;
+
+	const void *xml_zstd;
+	size_t xml_zstd_len;
 };
 
 struct usbd_client_pdata {
@@ -78,8 +71,9 @@ static void usbd_client_thread(struct thread_pool *pool, void *d)
 	struct usbd_client_pdata *pdata = d;
 
 	interpreter(pdata->pdata->ctx, pdata->ep_in, pdata->ep_out,
-			pdata->pdata->debug, false,
-			pdata->pdata->use_aio, pool);
+			pdata->pdata->debug, false, true,
+			pdata->pdata->use_aio, pool,
+			pdata->pdata->xml_zstd, pdata->pdata->xml_zstd_len);
 
 	close(pdata->ep_in);
 	close(pdata->ep_out);
@@ -106,14 +100,14 @@ static int usb_open_pipe(struct usbd_pdata *pdata, unsigned int pipe_id)
 	 * before opening the endpoints again. */
 	thread_pool_stop_and_wait(pdata->pool[pipe_id]);
 
-	iio_snprintf(buf, sizeof(buf), "%s/ep%u", pdata->ffs, pipe_id * 2 + 1);
+	snprintf(buf, sizeof(buf), "%s/ep%u", pdata->ffs, pipe_id * 2 + 1);
 	cpdata->ep_out = open(buf, O_WRONLY);
 	if (cpdata->ep_out < 0) {
 		err = -errno;
 		goto err_free_cpdata;
 	}
 
-	iio_snprintf(buf, sizeof(buf), "%s/ep%u", pdata->ffs, pipe_id * 2 + 2);
+	snprintf(buf, sizeof(buf), "%s/ep%u", pdata->ffs, pipe_id * 2 + 2);
 	cpdata->ep_in = open(buf, O_RDONLY);
 	if (cpdata->ep_in < 0) {
 		err = -errno;
@@ -336,7 +330,8 @@ static int write_header(int fd, unsigned int nb_pipes)
 
 int start_usb_daemon(struct iio_context *ctx, const char *ffs,
 		bool debug, bool use_aio, unsigned int nb_pipes,
-		struct thread_pool *pool)
+		struct thread_pool *pool,
+		const void *xml_zstd, size_t xml_zstd_len)
 {
 	struct usbd_pdata *pdata;
 	unsigned int i;
@@ -361,7 +356,7 @@ int start_usb_daemon(struct iio_context *ctx, const char *ffs,
 		goto err_free_pdata_pool;
 	}
 
-	iio_snprintf(buf, sizeof(buf), "%s/ep0", ffs);
+	snprintf(buf, sizeof(buf), "%s/ep0", ffs);
 
 	pdata->ep0_fd = open(buf, O_RDWR);
 	if (pdata->ep0_fd < 0) {
@@ -384,6 +379,8 @@ int start_usb_daemon(struct iio_context *ctx, const char *ffs,
 	pdata->ctx = ctx;
 	pdata->debug = debug;
 	pdata->use_aio = use_aio;
+	pdata->xml_zstd = xml_zstd;
+	pdata->xml_zstd_len = xml_zstd_len;
 
 	ret = thread_pool_add_thread(pool, usbd_main, pdata, "usbd_main_thd");
 	if (!ret)

@@ -1,20 +1,10 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Library for interfacing industrial I/O (IIO) devices
  *
  * Copyright (C) 2018 Analog Devices, Inc.
  * Author: Robin Getz <robin.getz@analog.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * */
+ */
 
 #include "iio-private.h"
 #include <string.h>
@@ -91,3 +81,20 @@ int iio_buffer_attr_compare(const void *p1, const void *p2)
 	return strcmp(tmp1, tmp2);
 }
 
+int iio_context_info_compare(const void *p1, const void *p2)
+{
+	int ret;
+	const struct iio_context_info *tmp1 = *(struct iio_context_info **)p1;
+	const struct iio_context_info *tmp2 = *(struct iio_context_info **)p2;
+
+	if(!tmp1->uri)
+		return 1;
+	if (!tmp2->uri)
+		return 0;
+
+	ret = strcmp(tmp1->uri, tmp2->uri);
+	if (ret)
+		return ret;
+
+	return strcmp(tmp1->description, tmp2->description);
+}

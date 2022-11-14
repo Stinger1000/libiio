@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * iio_info - Part of Industrial I/O (IIO) utilities
  *
  * Copyright (C) 2014-2020 Analog Devices, Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  * */
 
 #include <errno.h>
@@ -35,14 +22,12 @@
 #endif
 
 static const struct option options[] = {
-	{"scan", no_argument, 0, 's'},
 	{0, 0, 0, 0},
 };
 
 static const char *options_descriptions[] = {
-	"[-x <xml_file>]\n"
-		"\t\t\t\t[-u <uri>]",
-	"Scan for available backends.",
+	("[-x <xml_file>]\n"
+		"\t\t\t\t[-u <uri>]"),
 };
 
 static int dev_is_buffer_capable(const struct iio_device *dev)
@@ -59,7 +44,7 @@ static int dev_is_buffer_capable(const struct iio_device *dev)
 	return false;
 }
 
-#define MY_OPTS "s"
+#define MY_OPTS ""
 
 int main(int argc, char **argv)
 {
@@ -87,7 +72,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Failed to add common options\n");
 		return EXIT_FAILURE;
 	}
-	while ((c = getopt_long(argc, argw, "+" COMMON_OPTIONS MY_OPTS,	/* Flawfinder: ignore */
+	while ((c = getopt_long(argc, argw, "+" COMMON_OPTIONS MY_OPTS "s", /* Flawfinder: ignore */
 					opts, NULL)) != -1) {
 		switch (c) {
 			/* All these are handled in the common */
@@ -95,6 +80,7 @@ int main(int argc, char **argv)
 		case 'n':
 		case 'x':
 		case 'u':
+		case 'T':
 			break;
 		case 'S':
 		case 'a':
@@ -131,7 +117,7 @@ int main(int argc, char **argv)
 	else {
 		char err_str[1024];
 		iio_strerror(-ret, err_str, sizeof(err_str));
-		fprintf(stderr, "Unable to get backend version: %s (%i)\n", err_str, ret);
+		fprintf(stderr, "Unable to get backend version: %s\n", err_str);
 	}
 
 	printf("Backend description string: %s\n",
@@ -150,8 +136,8 @@ int main(int argc, char **argv)
 		else {
 			char err_str[1024];
 			iio_strerror(-ret, err_str, sizeof(err_str));
-			fprintf(stderr, "\tUnable to read IIO context attributes: %s (%i)\n",
-					err_str, ret);
+			fprintf(stderr, "\tUnable to read IIO context attributes: %s\n",
+					err_str);
 		}
 	}
 
@@ -162,9 +148,12 @@ int main(int argc, char **argv)
 	for (i = 0; i < nb_devices; i++) {
 		const struct iio_device *dev = iio_context_get_device(ctx, i);
 		const char *name = iio_device_get_name(dev);
+		const char *label = iio_device_get_label(dev);
 		printf("\t%s:", iio_device_get_id(dev));
 		if (name)
 			printf(" %s", name);
+		if (label)
+			printf(" (label: %s)", label);
 		if (dev_is_buffer_capable(dev))
 			printf(" (buffer capable)");
 		printf("\n");
@@ -232,7 +221,7 @@ int main(int argc, char **argv)
 					printf("value: %s\n", buf);
 				} else {
 					iio_strerror(-ret, buf, BUF_SIZE);
-					printf("ERROR: %s (%i)\n", buf, ret);
+					printf("ERROR: %s\n", buf);
 				}
 			}
 		}
@@ -253,7 +242,7 @@ int main(int argc, char **argv)
 					printf("value: %s\n", buf);
 				} else {
 					iio_strerror(-ret, buf, BUF_SIZE);
-					printf("ERROR: %s (%i)\n", buf, ret);
+					printf("ERROR: %s\n", buf);
 				}
 			}
 		}
@@ -274,7 +263,7 @@ int main(int argc, char **argv)
 					printf("value: %s\n", buf);
 				} else {
 					iio_strerror(-ret, buf, BUF_SIZE);
-					printf("ERROR: %s (%i)\n", buf, ret);
+					printf("ERROR: %s\n", buf);
 				}
 			}
 		}
@@ -294,7 +283,7 @@ int main(int argc, char **argv)
 					printf("value: %s\n", buf);
 				} else {
 					iio_strerror(-ret, buf, BUF_SIZE);
-					printf("ERROR: %s (%i)\n", buf, ret);
+					printf("ERROR: %s\n", buf);
 				}
 			}
 		}
@@ -314,7 +303,7 @@ int main(int argc, char **argv)
 			printf("\t\tNo trigger on this device\n");
 		} else if (ret < 0) {
 			iio_strerror(-ret, buf, BUF_SIZE);
-			printf("ERROR: checking for trigger : %s (%i)\n", buf, ret);
+			printf("ERROR: checking for trigger : %s\n", buf);
 		}
 	}
 

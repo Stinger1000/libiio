@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * iio_common - Common functions used in the IIO utilities
  *
  * Copyright (C) 2014-2020 Analog Devices, Inc.
  * Author: Paul Cercueil
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  * */
 
 #include <iio.h>
@@ -25,6 +12,7 @@
 #include <inttypes.h>
 #include <getopt.h>
 #include <string.h>
+#include <time.h>
 
 #include "iio_common.h"
 #include "gen_code.h"
@@ -95,11 +83,11 @@ struct iio_context * autodetect_context(bool rtn, const char * name, const char 
 	}
 
 	if (ret == 0) {
-		printf("No IIO context found.\n");
+		fprintf(stderr, "No IIO context found.\n");
 		goto err_free_info_list;
 	}
 	if (rtn && ret == 1) {
-		printf("Using auto-detected IIO context at URI \"%s\"\n",
+		fprintf(stderr, "Using auto-detected IIO context at URI \"%s\"\n",
 		iio_context_info_get_uri(info[0]));
 		ctx = iio_create_context_from_uri(iio_context_info_get_uri(info[0]));
 	} else {
@@ -125,6 +113,21 @@ err_free_ctx:
 	return ctx;
 }
 
+int iio_device_enable_channel(const struct iio_device *dev, const char * channel, bool type)
+{
+	struct iio_channel *ch;
+
+	ch = iio_device_find_channel(dev, channel, type);
+	if (!ch)
+		return -ENXIO;
+
+	if (iio_channel_is_enabled(ch))
+		return -EBUSY;
+
+	iio_channel_enable(ch);
+	return 0;
+}
+
 unsigned long int sanitize_clamp(const char *name, const char *argv,
 	uint64_t min, uint64_t max)
 {
@@ -137,7 +140,7 @@ unsigned long int sanitize_clamp(const char *name, const char *argv,
 		/* sanitized buffer by taking first 20 (or less) char */
 		iio_snprintf(buf, sizeof(buf), "%s", argv);
 		errno = 0;
-		val = strtoul(buf, &end, 10);
+		val = strtoul(buf, &end, 0);
 		if (buf == end || errno == ERANGE)
 			val = 0;
 	}
@@ -193,6 +196,7 @@ static const struct option common_options[] = {
 	{"uri", required_argument, 0, 'u'},
 	{"scan", optional_argument, 0, 'S'},
 	{"auto", optional_argument, 0, 'a'},
+	{"timeout", required_argument, 0, 'T'},
 	{0, 0, 0, 0},
 };
 
@@ -236,17 +240,19 @@ struct option * add_common_options(const struct option * longopts)
 static const char *common_options_descriptions[] = {
 	"Show this help and quit.",
 	"Use the XML backend with the provided XML file.",
-	"Use the context at the provided URI."
+	("Use the context at the provided URI."
 		"\n\t\t\teg: 'ip:192.168.2.1', 'ip:pluto.local', or 'ip:'"
 		"\n\t\t\t    'usb:1.2.3', or 'usb:'"
 		"\n\t\t\t    'serial:/dev/ttyUSB0,115200,8n1'"
-		"\n\t\t\t    'local:' (Linux only)",
-	"Scan for available backends."
+		"\n\t\t\t    'local:' (Linux only)"),
+	("Scan for available backends."
 		"\n\t\t\toptional arg of specific backend(s)"
-		"\n\t\t\t    'ip', 'usb' or 'ip:usb'",
-	"Scan for available contexts and if a single context is"
+		"\n\t\t\t    'ip', 'usb' or 'ip:usb'"),
+	("Scan for available contexts and if a single context is"
 		"\n\t\t\tavailable use it. <arg> filters backend(s)"
-		"\n\t\t\t    'ip', 'usb' or 'ip:usb:'",
+		"\n\t\t\t    'ip', 'usb' or 'ip:usb:'"),
+	("Context timeout in milliseconds."
+		"\n\t\t\t0 = no timeout (wait forever)"),
 };
 
 
@@ -261,6 +267,7 @@ struct iio_context * handle_common_opts(char * name, int argc,
 	bool do_scan = false, detect_context = false;
 	char buf[128];
 	struct option *opts;
+	int timeout = -1;
 
 	/* Setting opterr to zero disables error messages from getopt_long */
 	opterr = 0;
@@ -339,6 +346,13 @@ struct iio_context * handle_common_opts(char * name, int argc,
 					arg = argv[optind++];
 			}
 			break;
+		case 'T':
+			if (!optarg) {
+				fprintf(stderr, "Timeout requires an argument\n");
+				return NULL;
+			}
+			timeout = sanitize_clamp("timeout", optarg, 0, INT_MAX);
+			break;
 		case '?':
 			break;
 		}
@@ -364,12 +378,24 @@ struct iio_context * handle_common_opts(char * name, int argc,
 		ctx = iio_create_default_context();
 
 	if (!ctx && !do_scan && !detect_context) {
-		char buf[1024];
-		iio_strerror(errno, buf, sizeof(buf));
+		char err_str[1024];
+		iio_strerror(errno, err_str, sizeof(err_str));
 		if (arg)
-			fprintf(stderr, "Unable to create IIO context %s: %s\n", arg, buf);
+			fprintf(stderr, "Unable to create IIO context %s: %s\n", arg, err_str);
 		else
-			fprintf(stderr, "Unable to create Local IIO context : %s\n", buf);
+			fprintf(stderr, "Unable to create Local IIO context : %s\n", err_str);
+	}
+
+	if (ctx && timeout >= 0) {
+		ssize_t ret = iio_context_set_timeout(ctx, timeout);
+		if (ret < 0) {
+			char err_str[1024];
+			iio_strerror(-(int)ret, err_str, sizeof(err_str));
+			fprintf(stderr, "IIO contexts set timeout failed : %s\n",
+					err_str);
+			iio_context_destroy(ctx);
+			return NULL;
+		}
 	}
 
 	return ctx;
@@ -408,3 +434,15 @@ void usage(char *name, const struct option *options,
 	exit(0);
 }
 
+uint64_t get_time_us(void)
+{
+	struct timespec tp;
+
+#ifdef _MSC_BUILD
+	timespec_get(&tp, TIME_UTC);
+#else
+	clock_gettime(CLOCK_REALTIME, &tp);
+#endif
+
+	return tp.tv_sec * 1000000ull + tp.tv_nsec / 1000;
+}

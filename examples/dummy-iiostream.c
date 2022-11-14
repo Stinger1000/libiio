@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * libiio - Dummy IIO streaming example
  *
@@ -12,20 +13,6 @@
  * Based on AD9361 example:
  * Copyright (C) 2014 IABG mbH
  * Author: Michael Feilen <feilen_at_iabg.de>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
 /*
@@ -137,7 +124,7 @@ static void shutdown()
 		if (ret < 0) {
 			char buf[256];
 			iio_strerror(-ret, buf, sizeof(buf));
-			fprintf(stderr, "%s (%d) while Disassociate trigger\n", buf, ret);
+			fprintf(stderr, "%s while Disassociate trigger\n", buf);
 		}
 	}
 
@@ -355,7 +342,7 @@ int main (int argc, char **argv)
 			if (ret < 0) {
 				char buf[256];
 				iio_strerror(-ret, buf, sizeof(buf));
-				fprintf(stderr, "%s (%d) while processing buffer\n", buf, ret);
+				fprintf(stderr, "%s while processing buffer\n", buf);
 			}
 			printf("\n");
 			break;
